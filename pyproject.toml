@@ -1,7 +1,16 @@
 [project]
 name = "arnie"
 version = "0.1.0"
-description = "Add your description here"
+description = "Benchmark tool for comparing VADL and openVADL compilers"
 readme = "README.md"
 requires-python = ">=3.14"
-dependencies = []
+dependencies = [
+    "tomli-w>=1.2.0",
+]
+
+[project.scripts]
+arnie = "arnie:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
