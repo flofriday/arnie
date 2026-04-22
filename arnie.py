@@ -1,17 +1,28 @@
 import argparse
+import csv
 import platform
 import shutil
+import statistics
 import subprocess
 import sys
 import tomllib
-import tomli_w
 from datetime import datetime, timezone
 from pathlib import Path
+
+import tomli_w
 
 CONFIG_FILE = Path("config.toml")
 DATA_DIR = Path("data")
 
+IGNORED_PASSES = [
+    "VDT",
+    "ViamVerificationPass",
+    "VIAM Creation (pseudo pass)",
+    "Lowering to VIAM",
+]
+
 SPECS = {
+    "miniARMv7": "sys/aarch32/miniARMv7.vadl",
     "sve": "sys/aarch64/sve.vadl",
     "hexagon": "sys/hexagon/hexagon.vadl",
     "rv32i": "sys/risc-v/rv32i.vadl",
@@ -62,7 +73,7 @@ def cmd_config(args: argparse.Namespace) -> None:
         hint = f" [{current}]" if current else ""
         try:
             value = input(f"{label}{hint}: ").strip()
-        except (EOFError, KeyboardInterrupt):
+        except EOFError, KeyboardInterrupt:
             print()
             sys.exit(1)
         return value if value else current
@@ -76,7 +87,10 @@ def cmd_config(args: argparse.Namespace) -> None:
 
     open_vadl_resolved = Path(open_vadl_path).expanduser()
     if not open_vadl_resolved.is_dir():
-        print(f"Error: openVADL path does not exist: {open_vadl_resolved}", file=sys.stderr)
+        print(
+            f"Error: openVADL path does not exist: {open_vadl_resolved}",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
     config.pop("vadl_path", None)
@@ -101,8 +115,9 @@ def cmd_bench(args: argparse.Namespace) -> None:
     print(f"Specs:  {', '.join(SPECS.keys())}")
     print(f"Runs:   {args.warmup} warmup + {args.runs} measured\n")
 
-    if DATA_DIR.exists():
-        shutil.rmtree(DATA_DIR)
+    for d in (DATA_DIR, Path("plots")):
+        if d.exists():
+            shutil.rmtree(d)
     run_dir.mkdir(parents=True)
 
     if not args.no_build:
@@ -138,12 +153,19 @@ def cmd_bench(args: argparse.Namespace) -> None:
                     capture_output=True,
                 )
                 if result.returncode != 0:
+                    stdout = result.stdout.decode(errors="replace")
                     stderr = result.stderr.decode(errors="replace")
-                    print(f"Error: compiler failed on {spec_path}:\n{stderr}", file=sys.stderr)
+                    output = "\n".join(filter(None, [stdout, stderr]))
+                    print(
+                        f"Error: compiler failed on {spec_path}:\n{output}",
+                        file=sys.stderr,
+                    )
                     sys.exit(1)
 
                 src = repo / "output" / "timings.csv"
-                dst = out_dir / (f"warmup_{i}.csv" if is_warmup else f"run_{i - args.warmup}.csv")
+                dst = out_dir / (
+                    f"warmup_{i}.csv" if is_warmup else f"run_{i - args.warmup}.csv"
+                )
                 shutil.move(src, dst)
 
     metadata = {
@@ -171,8 +193,311 @@ def cmd_bench(args: argparse.Namespace) -> None:
     print(f"       Symlink: {latest} -> {timestamp}")
 
 
+def load_runs(spec_dir: Path) -> list[dict[str, float]]:
+    """Return one pass->ms dict per measured run (warmup files excluded)."""
+    runs = []
+    for f in sorted(spec_dir.glob("run_*.csv")):
+        with f.open(newline="") as fh:
+            reader = csv.DictReader(fh)
+            runs.append({row["pass"]: float(row["duration_ms"]) for row in reader})
+    return runs
+
+
+def load_benchmark(data_dir: Path) -> tuple[dict, dict]:
+    """Return (metadata, data) where data[build][spec] = list of run dicts."""
+    meta_path = data_dir / "metadata.toml"
+    if not meta_path.exists():
+        print(f"Error: no metadata.toml found in {data_dir}", file=sys.stderr)
+        sys.exit(1)
+    with meta_path.open("rb") as f:
+        meta = tomllib.load(f)
+
+    data: dict[str, dict[str, list[dict[str, float]]]] = {}
+    for build_dir in sorted(data_dir.iterdir()):
+        if not build_dir.is_dir() or build_dir.name == "latest":
+            continue
+        build = build_dir.name
+        data[build] = {}
+        for spec_dir in sorted(build_dir.iterdir()):
+            if spec_dir.is_dir():
+                runs = load_runs(spec_dir)
+                if runs:
+                    data[build][spec_dir.name] = runs
+    return meta, data
+
+
+def plot_total_time(data: dict, meta: dict, plots_dir: Path) -> Path:
+    import matplotlib.pyplot as plt
+    import numpy as np
+
+    builds = list(data.keys())
+    specs = list(next(iter(data.values())).keys())
+    n_specs = len(specs)
+    n_builds = len(builds)
+
+    means = {b: [] for b in builds}
+    errs = {b: [] for b in builds}
+
+    def allowed_total(run: dict[str, float]) -> float:
+        return sum(
+            ms
+            for phase, ms in run.items()
+            if phase != "Total" and not any(ig in phase for ig in IGNORED_PASSES)
+        )
+
+    for build in builds:
+        for spec in specs:
+            totals = [allowed_total(run) for run in data[build].get(spec, [])]
+            means[build].append(statistics.mean(totals) if totals else 0)
+            errs[build].append(statistics.stdev(totals) if len(totals) > 1 else 0)
+
+    x = np.arange(n_specs)
+    width = 0.35
+    offsets = np.linspace(-(n_builds - 1) / 2, (n_builds - 1) / 2, n_builds) * width
+
+    fig, ax = plt.subplots(figsize=(max(6, n_specs * 2), 5))
+    for i, build in enumerate(builds):
+        ax.bar(
+            x + offsets[i],
+            means[build],
+            width,
+            yerr=errs[build],
+            capsize=4,
+            label=build,
+        )
+
+    ax.set_xlabel("Spec")
+    ax.set_ylabel("Compile time (ms)")
+    ax.set_title("Total compile time — openVADL")
+    ax.set_xticks(x)
+    ax.set_xticklabels(specs)
+    ax.legend()
+    ax.set_ylim(bottom=0)
+    ax.yaxis.grid(True, color="gray", linewidth=0.4, alpha=0.5)
+    ax.set_axisbelow(True)
+
+    commit = meta.get("open_vadl_commit", "")[:12]
+    runs = meta.get("runs", "?")
+    fig.text(
+        0.5,
+        -0.02,
+        f"commit {commit} · {runs} runs · error bars = stddev",
+        ha="center",
+        fontsize=8,
+        color="gray",
+    )
+    fig.tight_layout()
+
+    out = plots_dir / "total_time.pdf"
+    fig.savefig(out, bbox_inches="tight")
+    plt.close(fig)
+    return out
+
+
+def allowed_phases(data: dict) -> list[str]:
+    """Return allowed phases in order of first appearance across all builds/specs."""
+    import matplotlib.pyplot as plt  # noqa: ensure matplotlib is available
+
+    phase_order: list[str] = []
+    for build_data in data.values():
+        for runs in build_data.values():
+            for run in runs:
+                for phase in run:
+                    if (
+                        phase != "Total"
+                        and phase not in phase_order
+                        and not any(ig in phase for ig in IGNORED_PASSES)
+                    ):
+                        phase_order.append(phase)
+    return phase_order
+
+
+def phase_colors(phase_order: list[str]) -> dict[str, tuple]:
+    import matplotlib.pyplot as plt
+
+    cmap = plt.colormaps["tab20"]
+    return {
+        phase: cmap(i / max(len(phase_order), 1)) for i, phase in enumerate(phase_order)
+    }
+
+
+def plot_phase_breakdown(data: dict, meta: dict, plots_dir: Path) -> list[Path]:
+    import matplotlib.pyplot as plt
+    import numpy as np
+
+    specs = list(next(iter(data.values())).keys())
+    phases = allowed_phases(data)
+    colors = phase_colors(phases)
+    outputs = []
+
+    for build, build_data in data.items():
+        # Phases present in this build
+        phase_order: list[str] = []
+        for spec in specs:
+            for run in build_data.get(spec, []):
+                for phase in run:
+                    if phase in phases and phase not in phase_order:
+                        phase_order.append(phase)
+
+        # Mean duration per phase per spec
+        phase_means: dict[str, list[float]] = {p: [] for p in phase_order}
+        for spec in specs:
+            runs = build_data.get(spec, [])
+            for phase in phase_order:
+                vals = [r[phase] for r in runs if phase in r]
+                phase_means[phase].append(statistics.mean(vals) if vals else 0)
+
+        x = np.arange(len(specs))
+        width = 0.6
+        fig, ax = plt.subplots(figsize=(max(6, len(specs) * 2), 5))
+
+        bottoms = np.zeros(len(specs))
+        for phase in phase_order:
+            heights = np.array(phase_means[phase])
+            ax.bar(x, heights, width, bottom=bottoms, label=phase, color=colors[phase])
+            bottoms += heights
+
+        ax.set_xlabel("Spec")
+        ax.set_ylabel("Compile time (ms)")
+        ax.set_title(f"Phase breakdown — {build} build")
+        ax.set_xticks(x)
+        ax.set_xticklabels(specs)
+        ax.legend(loc="upper left", bbox_to_anchor=(1, 1), fontsize=7)
+        ax.set_ylim(bottom=0)
+        ax.yaxis.grid(True, color="gray", linewidth=0.4, alpha=0.5)
+        ax.set_axisbelow(True)
+
+        commit = meta.get("open_vadl_commit", "")[:12]
+        runs = meta.get("runs", "?")
+        fig.text(
+            0.5,
+            -0.02,
+            f"commit {commit} · {runs} runs · averaged across runs",
+            ha="center",
+            fontsize=8,
+            color="gray",
+        )
+        fig.tight_layout()
+
+        out = plots_dir / f"phase_breakdown_{build}.pdf"
+        fig.savefig(out, bbox_inches="tight")
+        plt.close(fig)
+        outputs.append(out)
+
+    return outputs
+
+
+def plot_phase_breakdown_combined(data: dict, meta: dict, plots_dir: Path) -> Path:
+    import matplotlib.pyplot as plt
+    import numpy as np
+
+    builds = list(data.keys())
+    specs = list(next(iter(data.values())).keys())
+    phase_order = allowed_phases(data)
+    colors = phase_colors(phase_order)
+
+    # X positions: one group per spec, bars interleaved by build
+    n_specs = len(specs)
+    n_builds = len(builds)
+    width = 0.35
+    offsets = np.linspace(-(n_builds - 1) / 2, (n_builds - 1) / 2, n_builds) * width
+    x = np.arange(n_specs)
+
+    fig, ax = plt.subplots(figsize=(max(8, n_specs * 3), 5))
+
+    for bi, build in enumerate(builds):
+        build_data = data[build]
+        bottoms = np.zeros(n_specs)
+        for phase in phase_order:
+            heights = np.array(
+                [
+                    statistics.mean(
+                        [r[phase] for r in build_data.get(spec, []) if phase in r]
+                        or [0]
+                    )
+                    for spec in specs
+                ]
+            )
+            ax.bar(
+                x + offsets[bi],
+                heights,
+                width,
+                bottom=bottoms,
+                color=colors[phase],
+                label=phase if bi == 0 else "_nolegend_",
+            )
+            bottoms += heights
+
+        # Build label below each bar group
+        for xi in x:
+            ax.text(
+                xi + offsets[bi],
+                -ax.get_ylim()[1] * 0.03,
+                build,
+                ha="center",
+                va="top",
+                fontsize=7,
+                color="gray",
+            )
+
+    ax.set_xlabel("Spec")
+    ax.set_ylabel("Compile time (ms)")
+    ax.set_title("Phase breakdown — all builds")
+    ax.set_xticks(x)
+    ax.set_xticklabels(specs)
+    ax.legend(loc="upper left", bbox_to_anchor=(1, 1), fontsize=7)
+    ax.set_ylim(bottom=0)
+    ax.yaxis.grid(True, color="gray", linewidth=0.4, alpha=0.5)
+    ax.set_axisbelow(True)
+
+    commit = meta.get("open_vadl_commit", "")[:12]
+    runs = meta.get("runs", "?")
+    fig.text(
+        0.5,
+        -0.02,
+        f"commit {commit} · {runs} runs · averaged across runs",
+        ha="center",
+        fontsize=8,
+        color="gray",
+    )
+    fig.tight_layout()
+
+    out = plots_dir / "phase_breakdown.pdf"
+    fig.savefig(out, bbox_inches="tight")
+    plt.close(fig)
+    return out
+
+
 def cmd_plot(args: argparse.Namespace) -> None:
-    print("plot: not yet implemented")
+    data_dir = Path(args.data).resolve()
+    if not data_dir.exists():
+        print(f"Error: data directory not found: {data_dir}", file=sys.stderr)
+        sys.exit(1)
+
+    # Resolve symlink (e.g. data/latest -> data/2026-...)
+    if data_dir.is_symlink():
+        data_dir = data_dir.parent / data_dir.readlink()
+
+    print(f"Loading data from {data_dir}")
+    meta, data = load_benchmark(data_dir)
+
+    if not data:
+        print("Error: no benchmark data found.", file=sys.stderr)
+        sys.exit(1)
+
+    plots_dir = Path("plots")
+    plots_dir.mkdir(exist_ok=True)
+
+    out1 = plot_total_time(data, meta, plots_dir)
+    print(f"  Written: {out1}")
+
+    for out in plot_phase_breakdown(data, meta, plots_dir):
+        print(f"  Written: {out}")
+
+    out = plot_phase_breakdown_combined(data, meta, plots_dir)
+    print(f"  Written: {out}")
+
+    print(f"\nDone. Plots in {plots_dir.resolve()}")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -222,10 +547,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="skip the gradle build step",
     )
 
-    subparsers.add_parser(
+    plot = subparsers.add_parser(
         "plot",
         help="plot benchmark results from data/",
         color=True,
+    )
+    plot.add_argument(
+        "--data",
+        default="data/latest",
+        metavar="PATH",
+        help="benchmark run directory to plot (default: data/latest)",
     )
 
     return parser
