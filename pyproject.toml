@@ -1,7 +1,7 @@
 [project]
 name = "arnie"
 version = "0.1.0"
-description = "Benchmark tool for comparing VADL and openVADL compilers"
+description = "Benchmark tool for openVADL compiler performance"
 readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [

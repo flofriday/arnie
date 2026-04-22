@@ -17,7 +17,6 @@ def load_config() -> dict:
 def cmd_config(args: argparse.Namespace) -> None:
     config = load_config()
 
-    current_vadl = config.get("vadl_path", "")
     current_open_vadl = config.get("open_vadl_path", "")
 
     def prompt(label: str, current: str) -> str:
@@ -29,27 +28,21 @@ def cmd_config(args: argparse.Namespace) -> None:
             sys.exit(1)
         return value if value else current
 
-    print("Configure compiler repository paths (absolute paths).\n")
+    print("Configure compiler repository path (absolute path).\n")
 
-    vadl_path = prompt("VADL repository path", current_vadl)
     open_vadl_path = prompt("openVADL repository path", current_open_vadl)
 
-    if not vadl_path or not open_vadl_path:
-        print("Error: both paths are required.", file=sys.stderr)
+    if not open_vadl_path:
+        print("Error: path is required.", file=sys.stderr)
         sys.exit(1)
 
-    vadl_resolved = Path(vadl_path).expanduser()
     open_vadl_resolved = Path(open_vadl_path).expanduser()
-
-    if not vadl_resolved.is_dir():
-        print(f"Error: VADL path does not exist: {vadl_resolved}", file=sys.stderr)
-        sys.exit(1)
 
     if not open_vadl_resolved.is_dir():
         print(f"Error: openVADL path does not exist: {open_vadl_resolved}", file=sys.stderr)
         sys.exit(1)
 
-    config["vadl_path"] = str(vadl_resolved.resolve())
+    config.pop("vadl_path", None)
     config["open_vadl_path"] = str(open_vadl_resolved.resolve())
 
     with CONFIG_FILE.open("wb") as f:
@@ -61,7 +54,7 @@ def cmd_config(args: argparse.Namespace) -> None:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="arnie",
-        description="Benchmark tool for comparing VADL and openVADL compilers.",
+        description="Benchmark tool for openVADL compiler performance.",
         color=True,
     )
     subparsers = parser.add_subparsers(title="commands", dest="command")
@@ -69,7 +62,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     subparsers.add_parser(
         "config",
-        help="create or update config.toml with compiler repository paths",
+        help="create or update config.toml with the openVADL repository path",
         color=True,
     )
 
