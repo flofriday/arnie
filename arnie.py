@@ -226,7 +226,18 @@ def load_benchmark(data_dir: Path) -> tuple[dict, dict]:
     return meta, data
 
 
-def plot_total_time(data: dict, meta: dict, plots_dir: Path) -> Path:
+def setup_style() -> None:
+    import matplotlib.pyplot as plt
+    import scienceplots  # noqa: F401 — registers the style
+
+    plt.style.use("science")
+
+
+# Full text width of a standard LaTeX article (letter paper, 1-inch margins)
+FIGURE_WIDTH = 6.5
+
+
+def plot_total_time(data: dict, meta: dict, plots_dir: Path, ext: str = "pdf") -> Path:
     import matplotlib.pyplot as plt
     import numpy as np
 
@@ -255,7 +266,7 @@ def plot_total_time(data: dict, meta: dict, plots_dir: Path) -> Path:
     width = 0.35
     offsets = np.linspace(-(n_builds - 1) / 2, (n_builds - 1) / 2, n_builds) * width
 
-    fig, ax = plt.subplots(figsize=(max(6, n_specs * 2), 5))
+    fig, ax = plt.subplots(figsize=(FIGURE_WIDTH, 3))
     for i, build in enumerate(builds):
         ax.bar(
             x + offsets[i],
@@ -268,13 +279,11 @@ def plot_total_time(data: dict, meta: dict, plots_dir: Path) -> Path:
 
     ax.set_xlabel("Spec")
     ax.set_ylabel("Compile time (ms)")
-    ax.set_title("Total compile time — openVADL")
+    ax.set_title("Total compile time --- openVADL")
     ax.set_xticks(x)
     ax.set_xticklabels(specs)
     ax.legend()
     ax.set_ylim(bottom=0)
-    ax.yaxis.grid(True, color="gray", linewidth=0.4, alpha=0.5)
-    ax.set_axisbelow(True)
 
     commit = meta.get("open_vadl_commit", "")[:12]
     runs = meta.get("runs", "?")
@@ -288,7 +297,7 @@ def plot_total_time(data: dict, meta: dict, plots_dir: Path) -> Path:
     )
     fig.tight_layout()
 
-    out = plots_dir / "total_time.pdf"
+    out = plots_dir / f"total_time.{ext}"
     fig.savefig(out, bbox_inches="tight")
     plt.close(fig)
     return out
@@ -321,7 +330,7 @@ def phase_colors(phase_order: list[str]) -> dict[str, tuple]:
     }
 
 
-def plot_phase_breakdown(data: dict, meta: dict, plots_dir: Path) -> list[Path]:
+def plot_phase_breakdown(data: dict, meta: dict, plots_dir: Path, ext: str = "pdf") -> list[Path]:
     import matplotlib.pyplot as plt
     import numpy as np
 
@@ -349,7 +358,7 @@ def plot_phase_breakdown(data: dict, meta: dict, plots_dir: Path) -> list[Path]:
 
         x = np.arange(len(specs))
         width = 0.6
-        fig, ax = plt.subplots(figsize=(max(6, len(specs) * 2), 5))
+        fig, ax = plt.subplots(figsize=(FIGURE_WIDTH, 3))
 
         bottoms = np.zeros(len(specs))
         for phase in phase_order:
@@ -359,13 +368,11 @@ def plot_phase_breakdown(data: dict, meta: dict, plots_dir: Path) -> list[Path]:
 
         ax.set_xlabel("Spec")
         ax.set_ylabel("Compile time (ms)")
-        ax.set_title(f"Phase breakdown — {build} build")
+        ax.set_title(f"Phase breakdown --- {build} build")
         ax.set_xticks(x)
         ax.set_xticklabels(specs)
-        ax.legend(loc="upper left", bbox_to_anchor=(1, 1), fontsize=7)
+        ax.legend(loc="upper left", bbox_to_anchor=(1, 1))
         ax.set_ylim(bottom=0)
-        ax.yaxis.grid(True, color="gray", linewidth=0.4, alpha=0.5)
-        ax.set_axisbelow(True)
 
         commit = meta.get("open_vadl_commit", "")[:12]
         runs = meta.get("runs", "?")
@@ -379,7 +386,7 @@ def plot_phase_breakdown(data: dict, meta: dict, plots_dir: Path) -> list[Path]:
         )
         fig.tight_layout()
 
-        out = plots_dir / f"phase_breakdown_{build}.pdf"
+        out = plots_dir / f"phase_breakdown_{build}.{ext}"
         fig.savefig(out, bbox_inches="tight")
         plt.close(fig)
         outputs.append(out)
@@ -387,7 +394,7 @@ def plot_phase_breakdown(data: dict, meta: dict, plots_dir: Path) -> list[Path]:
     return outputs
 
 
-def plot_phase_breakdown_combined(data: dict, meta: dict, plots_dir: Path) -> Path:
+def plot_phase_breakdown_combined(data: dict, meta: dict, plots_dir: Path, ext: str = "pdf") -> Path:
     import matplotlib.pyplot as plt
     import numpy as np
 
@@ -403,7 +410,7 @@ def plot_phase_breakdown_combined(data: dict, meta: dict, plots_dir: Path) -> Pa
     offsets = np.linspace(-(n_builds - 1) / 2, (n_builds - 1) / 2, n_builds) * width
     x = np.arange(n_specs)
 
-    fig, ax = plt.subplots(figsize=(max(8, n_specs * 3), 5))
+    fig, ax = plt.subplots(figsize=(FIGURE_WIDTH, 3))
 
     for bi, build in enumerate(builds):
         build_data = data[build]
@@ -445,10 +452,8 @@ def plot_phase_breakdown_combined(data: dict, meta: dict, plots_dir: Path) -> Pa
     ax.set_title("Phase breakdown — all builds")
     ax.set_xticks(x)
     ax.set_xticklabels(specs)
-    ax.legend(loc="upper left", bbox_to_anchor=(1, 1), fontsize=7)
+    ax.legend(loc="upper left", bbox_to_anchor=(1, 1))
     ax.set_ylim(bottom=0)
-    ax.yaxis.grid(True, color="gray", linewidth=0.4, alpha=0.5)
-    ax.set_axisbelow(True)
 
     commit = meta.get("open_vadl_commit", "")[:12]
     runs = meta.get("runs", "?")
@@ -462,13 +467,14 @@ def plot_phase_breakdown_combined(data: dict, meta: dict, plots_dir: Path) -> Pa
     )
     fig.tight_layout()
 
-    out = plots_dir / "phase_breakdown.pdf"
+    out = plots_dir / f"phase_breakdown.{ext}"
     fig.savefig(out, bbox_inches="tight")
     plt.close(fig)
     return out
 
 
 def cmd_plot(args: argparse.Namespace) -> None:
+    setup_style()
     data_dir = Path(args.data).resolve()
     if not data_dir.exists():
         print(f"Error: data directory not found: {data_dir}", file=sys.stderr)
@@ -487,14 +493,15 @@ def cmd_plot(args: argparse.Namespace) -> None:
 
     plots_dir = Path("plots")
     plots_dir.mkdir(exist_ok=True)
+    ext = "png" if args.png else "pdf"
 
-    out1 = plot_total_time(data, meta, plots_dir)
+    out1 = plot_total_time(data, meta, plots_dir, ext)
     print(f"  Written: {out1}")
 
-    for out in plot_phase_breakdown(data, meta, plots_dir):
+    for out in plot_phase_breakdown(data, meta, plots_dir, ext):
         print(f"  Written: {out}")
 
-    out = plot_phase_breakdown_combined(data, meta, plots_dir)
+    out = plot_phase_breakdown_combined(data, meta, plots_dir, ext)
     print(f"  Written: {out}")
 
     print(f"\nDone. Plots in {plots_dir.resolve()}")
@@ -557,6 +564,11 @@ def build_parser() -> argparse.ArgumentParser:
         default="data/latest",
         metavar="PATH",
         help="benchmark run directory to plot (default: data/latest)",
+    )
+    plot.add_argument(
+        "--png",
+        action="store_true",
+        help="output PNG instead of PDF (useful for previewing in editors)",
     )
 
     return parser
