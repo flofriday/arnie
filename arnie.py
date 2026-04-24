@@ -73,7 +73,7 @@ def cmd_config(args: argparse.Namespace) -> None:
         hint = f" [{current}]" if current else ""
         try:
             value = input(f"{label}{hint}: ").strip()
-        except EOFError, KeyboardInterrupt:
+        except (EOFError, KeyboardInterrupt):
             print()
             sys.exit(1)
         return value if value else current
@@ -226,87 +226,53 @@ def load_benchmark(data_dir: Path) -> tuple[dict, dict]:
     return meta, data
 
 
-def setup_style() -> None:
-    import matplotlib.pyplot as plt
-    import scienceplots  # noqa: F401 — registers the style
+# pgfplots fill colour + hatch pattern per series index
+PGF_STYLES = [
+    ("blue!40!white",   "north east lines"),
+    ("red!40!white",    "north west lines"),
+    ("green!50!black!40", "crosshatch"),
+    ("orange!60!white", "horizontal lines"),
+    ("purple!40!white", "vertical lines"),
+    ("teal!50!white",   "dots"),
+    ("brown!40!white",  "grid"),
+    ("cyan!40!white",   "crosshatch dots"),
+]
 
-    plt.style.use("science")
+# Preamble for plots.tex — the single compiled document
+_PLOTS_TEX = r"""\documentclass[a4paper,12pt]{article}
+\usepackage[a4paper,margin=2.5cm]{geometry}
+\usepackage{float}
+\usepackage{pgfplots}
+\pgfplotsset{compat=1.18}
+\usetikzlibrary{patterns}
+\usepgfplotslibrary{groupplots}
+% Required packages when including individual snippets in a paper:
+%   \usepackage{pgfplots}, \usetikzlibrary{patterns},
+%   \usepgfplotslibrary{groupplots}
+"""
+
+_AXIS_BASE = (
+    "    ymajorgrids=true,\n"
+    "    grid style={dashed,gray!30},\n"
+    "    ymin=0,\n"
+    "    tick align=inside,\n"
+    "    xtick align=inside,\n"
+)
 
 
-# Full text width of a standard LaTeX article (letter paper, 1-inch margins)
-FIGURE_WIDTH = 6.5
+def _pgf_style(i: int) -> str:
+    fill, pattern = PGF_STYLES[i % len(PGF_STYLES)]
+    return f"fill={fill}, postaction={{pattern={pattern}}}"
 
 
-def plot_total_time(data: dict, meta: dict, plots_dir: Path, ext: str = "pdf") -> Path:
-    import matplotlib.pyplot as plt
-    import numpy as np
-
-    builds = list(data.keys())
-    specs = list(next(iter(data.values())).keys())
-    n_specs = len(specs)
-    n_builds = len(builds)
-
-    means = {b: [] for b in builds}
-    errs = {b: [] for b in builds}
-
-    def allowed_total(run: dict[str, float]) -> float:
-        return sum(
-            ms
-            for phase, ms in run.items()
-            if phase != "Total" and not any(ig in phase for ig in IGNORED_PASSES)
-        )
-
-    for build in builds:
-        for spec in specs:
-            totals = [allowed_total(run) for run in data[build].get(spec, [])]
-            means[build].append(statistics.mean(totals) if totals else 0)
-            errs[build].append(statistics.stdev(totals) if len(totals) > 1 else 0)
-
-    x = np.arange(n_specs)
-    width = 0.35
-    offsets = np.linspace(-(n_builds - 1) / 2, (n_builds - 1) / 2, n_builds) * width
-
-    fig, ax = plt.subplots(figsize=(FIGURE_WIDTH, 3))
-    for i, build in enumerate(builds):
-        ax.bar(
-            x + offsets[i],
-            means[build],
-            width,
-            yerr=errs[build],
-            capsize=4,
-            label=build,
-        )
-
-    ax.set_xlabel("Spec")
-    ax.set_ylabel("Compile time (ms)")
-    ax.set_title("Total compile time --- openVADL")
-    ax.set_xticks(x)
-    ax.set_xticklabels(specs)
-    ax.legend()
-    ax.set_ylim(bottom=0)
-
-    commit = meta.get("open_vadl_commit", "")[:12]
-    runs = meta.get("runs", "?")
-    fig.text(
-        0.5,
-        -0.02,
-        f"commit {commit} · {runs} runs · error bars = stddev",
-        ha="center",
-        fontsize=8,
-        color="gray",
+def _allowed_total(run: dict[str, float]) -> float:
+    return sum(
+        ms for phase, ms in run.items()
+        if phase != "Total" and not any(ig in phase for ig in IGNORED_PASSES)
     )
-    fig.tight_layout()
-
-    out = plots_dir / f"total_time.{ext}"
-    fig.savefig(out, bbox_inches="tight")
-    plt.close(fig)
-    return out
 
 
 def allowed_phases(data: dict) -> list[str]:
-    """Return allowed phases in order of first appearance across all builds/specs."""
-    import matplotlib.pyplot as plt  # noqa: ensure matplotlib is available
-
     phase_order: list[str] = []
     for build_data in data.values():
         for runs in build_data.values():
@@ -321,188 +287,307 @@ def allowed_phases(data: dict) -> list[str]:
     return phase_order
 
 
-def phase_colors(phase_order: list[str]) -> dict[str, tuple]:
-    import matplotlib.pyplot as plt
+def compile_tex(tex_path: Path) -> Path:
+    result = subprocess.run(
+        ["pdflatex", "-interaction=nonstopmode", tex_path.name],
+        cwd=tex_path.parent,
+        capture_output=True,
+        text=True,
+    )
+    pdf_path = tex_path.with_suffix(".pdf")
+    if result.returncode != 0 or not pdf_path.exists():
+        log = tex_path.with_suffix(".log")
+        detail = log.read_text(errors="replace")[-3000:] if log.exists() else result.stdout
+        print(f"pdflatex error for {tex_path.name}:\n{detail}", file=sys.stderr)
+        sys.exit(1)
+    return pdf_path
 
-    cmap = plt.colormaps["tab20"]
-    return {
-        phase: cmap(i / max(len(phase_order), 1)) for i, phase in enumerate(phase_order)
-    }
+
+def pdf_to_png(pdf_path: Path) -> Path:
+    png_path = pdf_path.with_suffix(".png")
+    # Try Ghostscript (included with MacTeX / TeX Live)
+    for gs in ("gs", "gswin64c"):
+        result = subprocess.run(
+            [gs, "-dNOPAUSE", "-dBATCH", "-sDEVICE=pngalpha", "-r150",
+             f"-sOutputFile={png_path}", str(pdf_path)],
+            capture_output=True,
+        )
+        if result.returncode == 0 and png_path.exists():
+            return png_path
+    # Fallback: pdftoppm (poppler)
+    result = subprocess.run(
+        ["pdftoppm", "-r", "150", "-png", "-singlefile",
+         str(pdf_path), str(png_path.with_suffix(""))],
+        capture_output=True,
+    )
+    if result.returncode == 0 and png_path.exists():
+        return png_path
+    print(
+        f"Warning: could not convert {pdf_path.name} to PNG "
+        "(install Ghostscript or poppler).",
+        file=sys.stderr,
+    )
+    return pdf_path
 
 
-def plot_phase_breakdown(data: dict, meta: dict, plots_dir: Path, ext: str = "pdf") -> list[Path]:
-    import matplotlib.pyplot as plt
-    import numpy as np
+def gen_total_time_tex(data: dict, meta: dict, plots_dir: Path) -> Path:
+    builds = list(data.keys())
+    specs = list(next(iter(data.values())).keys())
+    commit = meta.get("open_vadl_commit", "")[:12]
+    runs_n = meta.get("runs", "?")
 
+    means: dict[str, list[float]] = {}
+    errs: dict[str, list[float]] = {}
+    for build in builds:
+        totals_per_spec = [
+            [_allowed_total(r) for r in data[build].get(spec, [])]
+            for spec in specs
+        ]
+        means[build] = [statistics.mean(t) if t else 0 for t in totals_per_spec]
+        errs[build] = [statistics.stdev(t) if len(t) > 1 else 0 for t in totals_per_spec]
+
+    addplots = []
+    for i, build in enumerate(builds):
+        coords = " ".join(
+            f"({spec},{means[build][j]:.2f}) +- (0,{errs[build][j]:.2f})"
+            for j, spec in enumerate(specs)
+        )
+        addplots.append(
+            f"\\addplot[{_pgf_style(i)}]\n"
+            f"    plot[error bars/.cd, y dir=both, y explicit]\n"
+            f"    coordinates {{{coords}}};\n"
+            f"\\addlegendentry{{{build}}}"
+        )
+
+    sym = ",".join(specs)
+    body = "\n".join(addplots)
+    tex = (
+        f"% total_time — commit {commit} · {runs_n} runs · error bars = stddev\n"
+        + "\\begin{tikzpicture}\n"
+        + "\\begin{axis}[\n"
+        + "    ybar,\n"
+        + "    bar width=14pt,\n"
+        + "    width=14cm, height=7cm,\n"
+        + f"    symbolic x coords={{{sym}}},\n"
+        + "    xtick=data,\n"
+        + "    enlarge x limits=0.2,\n"
+        + "    xlabel={Specification},\n"
+        + "    ylabel={Compile time (ms)},\n"
+        + "    title={Total compile time},\n"
+        + "    legend style={at={(0.5,-0.15)},anchor=north,legend columns=-1},\n"
+        + _AXIS_BASE
+        + "]\n"
+        + body + "\n"
+        + "\\end{axis}\n"
+        + "\\end{tikzpicture}\n"
+    )
+    out = plots_dir / "total_time.tex"
+    out.write_text(tex)
+    return out
+
+
+def _stacked_addplots(phases: list[str], build_data: dict, specs: list[str],
+                      first: bool) -> str:
+    lines = []
+    for i, phase in enumerate(phases):
+        coords = " ".join(
+            f"({spec},{statistics.mean([r[phase] for r in build_data.get(spec, []) if phase in r] or [0]):.2f})"
+            for spec in specs
+        )
+        entry = f"\\addlegendentry{{{phase}}}" if first else ""
+        lines.append(
+            f"\\addplot[{_pgf_style(i)}] coordinates {{{coords}}};\n{entry}"
+        )
+    return "\n".join(lines)
+
+
+def gen_phase_breakdown_tex(data: dict, meta: dict, plots_dir: Path) -> list[Path]:
     specs = list(next(iter(data.values())).keys())
     phases = allowed_phases(data)
-    colors = phase_colors(phases)
+    commit = meta.get("open_vadl_commit", "")[:12]
+    runs_n = meta.get("runs", "?")
+    sym = ",".join(specs)
     outputs = []
 
     for build, build_data in data.items():
-        # Phases present in this build
-        phase_order: list[str] = []
-        for spec in specs:
-            for run in build_data.get(spec, []):
-                for phase in run:
-                    if phase in phases and phase not in phase_order:
-                        phase_order.append(phase)
-
-        # Mean duration per phase per spec
-        phase_means: dict[str, list[float]] = {p: [] for p in phase_order}
-        for spec in specs:
-            runs = build_data.get(spec, [])
-            for phase in phase_order:
-                vals = [r[phase] for r in runs if phase in r]
-                phase_means[phase].append(statistics.mean(vals) if vals else 0)
-
-        x = np.arange(len(specs))
-        width = 0.6
-        fig, ax = plt.subplots(figsize=(FIGURE_WIDTH, 3))
-
-        bottoms = np.zeros(len(specs))
-        for phase in phase_order:
-            heights = np.array(phase_means[phase])
-            ax.bar(x, heights, width, bottom=bottoms, label=phase, color=colors[phase])
-            bottoms += heights
-
-        ax.set_xlabel("Spec")
-        ax.set_ylabel("Compile time (ms)")
-        ax.set_title(f"Phase breakdown --- {build} build")
-        ax.set_xticks(x)
-        ax.set_xticklabels(specs)
-        ax.legend(loc="upper left", bbox_to_anchor=(1, 1))
-        ax.set_ylim(bottom=0)
-
-        commit = meta.get("open_vadl_commit", "")[:12]
-        runs = meta.get("runs", "?")
-        fig.text(
-            0.5,
-            -0.02,
-            f"commit {commit} · {runs} runs · averaged across runs",
-            ha="center",
-            fontsize=8,
-            color="gray",
+        body = _stacked_addplots(phases, build_data, specs, first=True)
+        tex = (
+            f"% phase_breakdown_{build} — commit {commit} · {runs_n} runs · averaged\n"
+            + "\\begin{tikzpicture}\n"
+            + "\\begin{axis}[\n"
+            + "    ybar stacked,\n"
+            + "    bar width=16pt,\n"
+            + "    width=12cm, height=7cm,\n"
+            + f"    symbolic x coords={{{sym}}},\n"
+            + "    xtick=data,\n"
+            + "    enlarge x limits=0.2,\n"
+            + "    xlabel={Specification},\n"
+            + "    ylabel={Compile time (ms)},\n"
+            + f"    title={{Phase breakdown --- {build} build}},\n"
+            + "    legend style={at={(1.02,1)},anchor=north west,font=\\small},\n"
+            + _AXIS_BASE
+            + "]\n"
+            + body + "\n"
+            + "\\end{axis}\n"
+            + "\\end{tikzpicture}\n"
         )
-        fig.tight_layout()
-
-        out = plots_dir / f"phase_breakdown_{build}.{ext}"
-        fig.savefig(out, bbox_inches="tight")
-        plt.close(fig)
+        out = plots_dir / f"phase_breakdown_{build}.tex"
+        out.write_text(tex)
         outputs.append(out)
 
     return outputs
 
 
-def plot_phase_breakdown_combined(data: dict, meta: dict, plots_dir: Path, ext: str = "pdf") -> Path:
-    import matplotlib.pyplot as plt
-    import numpy as np
-
+def gen_phase_breakdown_combined_tex(data: dict, meta: dict, plots_dir: Path) -> Path:
     builds = list(data.keys())
     specs = list(next(iter(data.values())).keys())
-    phase_order = allowed_phases(data)
-    colors = phase_colors(phase_order)
-
-    # X positions: one group per spec, bars interleaved by build
-    n_specs = len(specs)
-    n_builds = len(builds)
-    width = 0.35
-    offsets = np.linspace(-(n_builds - 1) / 2, (n_builds - 1) / 2, n_builds) * width
-    x = np.arange(n_specs)
-
-    fig, ax = plt.subplots(figsize=(FIGURE_WIDTH, 3))
-
-    for bi, build in enumerate(builds):
-        build_data = data[build]
-        bottoms = np.zeros(n_specs)
-        for phase in phase_order:
-            heights = np.array(
-                [
-                    statistics.mean(
-                        [r[phase] for r in build_data.get(spec, []) if phase in r]
-                        or [0]
-                    )
-                    for spec in specs
-                ]
-            )
-            ax.bar(
-                x + offsets[bi],
-                heights,
-                width,
-                bottom=bottoms,
-                color=colors[phase],
-                label=phase if bi == 0 else "_nolegend_",
-            )
-            bottoms += heights
-
-        # Build label below each bar group
-        for xi in x:
-            ax.text(
-                xi + offsets[bi],
-                -ax.get_ylim()[1] * 0.03,
-                build,
-                ha="center",
-                va="top",
-                fontsize=7,
-                color="gray",
-            )
-
-    ax.set_xlabel("Spec")
-    ax.set_ylabel("Compile time (ms)")
-    ax.set_title("Phase breakdown — all builds")
-    ax.set_xticks(x)
-    ax.set_xticklabels(specs)
-    ax.legend(loc="upper left", bbox_to_anchor=(1, 1))
-    ax.set_ylim(bottom=0)
-
+    phases = allowed_phases(data)
     commit = meta.get("open_vadl_commit", "")[:12]
-    runs = meta.get("runs", "?")
-    fig.text(
-        0.5,
-        -0.02,
-        f"commit {commit} · {runs} runs · averaged across runs",
-        ha="center",
-        fontsize=8,
-        color="gray",
-    )
-    fig.tight_layout()
+    runs_n = meta.get("runs", "?")
 
-    out = plots_dir / f"phase_breakdown.{ext}"
-    fig.savefig(out, bbox_inches="tight")
-    plt.close(fig)
+    n_builds = len(builds)
+    gap = n_builds + 1  # bars per group + 1 empty unit between groups
+
+    def bar_pos(si: int, bi: int) -> float:
+        return si * gap + bi + 1
+
+    centers = [(bar_pos(si, 0) + bar_pos(si, n_builds - 1)) / 2
+               for si in range(len(specs))]
+    xmax = bar_pos(len(specs) - 1, n_builds - 1) + gap / 2
+
+    addplots = []
+    for pi, phase in enumerate(phases):
+        coords = " ".join(
+            f"({bar_pos(si, bi):.1f},"
+            f"{statistics.mean([r[phase] for r in data[build].get(spec, []) if phase in r] or [0]):.2f})"
+            for si, spec in enumerate(specs)
+            for bi, build in enumerate(builds)
+        )
+        addplots.append(
+            f"\\addplot[{_pgf_style(pi)}] coordinates {{{coords}}};\n"
+            f"\\addlegendentry{{{phase}}}"
+        )
+
+    xtick = ",".join(f"{c:.1f}" for c in centers)
+    xticklabels = ",".join(specs)
+    extra_ticks = ",".join(
+        f"{bar_pos(si, bi):.1f}"
+        for si in range(len(specs))
+        for bi in range(n_builds)
+    )
+    extra_labels = ",".join(
+        build for _ in specs for build in builds
+    )
+
+    body = "\n".join(addplots)
+    tex = (
+        f"% phase_breakdown — commit {commit} · {runs_n} runs · averaged across runs\n"
+        + "\\begin{tikzpicture}\n"
+        + "\\begin{axis}[\n"
+        + "    ybar stacked,\n"
+        + "    bar width=10pt,\n"
+        + "    width=15cm, height=8cm,\n"
+        + f"    xmin=0, xmax={xmax:.1f},\n"
+        + f"    xtick={{{xtick}}},\n"
+        + f"    xticklabels={{{xticklabels}}},\n"
+        + f"    extra x ticks={{{extra_ticks}}},\n"
+        + f"    extra x tick labels={{{extra_labels}}},\n"
+        + "    extra x tick style={tick label style={font=\\tiny,rotate=45,anchor=north east}},\n"
+        + "    xlabel={Specification},\n"
+        + "    ylabel={Compile time (ms)},\n"
+        + "    title={Phase breakdown --- all builds},\n"
+        + "    legend style={at={(1.02,1)},anchor=north west,font=\\small},\n"
+        + _AXIS_BASE
+        + "]\n"
+        + body + "\n"
+        + "\\end{axis}\n"
+        + "\\end{tikzpicture}\n"
+    )
+    out = plots_dir / "phase_breakdown.tex"
+    out.write_text(tex)
     return out
 
 
+def gen_plots_tex(snippet_paths: list[Path], plots_dir: Path) -> Path:
+    inputs = "\n".join(
+        f"\\begin{{figure}}[H]\n\\centering\n\\input{{{p.name}}}\n\\end{{figure}}"
+        for p in snippet_paths
+    )
+    tex = (
+        _PLOTS_TEX
+        + "\\begin{document}\n"
+        + inputs + "\n"
+        + "\\end{document}\n"
+    )
+    out = plots_dir / "plots.tex"
+    out.write_text(tex)
+    return out
+
+
+def pdf_to_png(pdf_path: Path) -> list[Path]:
+    stem = pdf_path.stem
+    out_pattern = pdf_path.parent / f"{stem}-%d.png"
+    for gs in ("gs", "gswin64c"):
+        result = subprocess.run(
+            [gs, "-dNOPAUSE", "-dBATCH", "-sDEVICE=pngalpha", "-r150",
+             f"-sOutputFile={out_pattern}", str(pdf_path)],
+            capture_output=True,
+        )
+        if result.returncode == 0:
+            pngs = sorted(pdf_path.parent.glob(f"{stem}-*.png"))
+            if pngs:
+                return pngs
+    # Fallback: pdftoppm (poppler)
+    result = subprocess.run(
+        ["pdftoppm", "-r", "150", "-png",
+         str(pdf_path), str(pdf_path.parent / stem)],
+        capture_output=True,
+    )
+    pngs = sorted(pdf_path.parent.glob(f"{stem}-*.png"))
+    if result.returncode == 0 and pngs:
+        return pngs
+    print(
+        f"Warning: could not convert {pdf_path.name} to PNG "
+        "(install Ghostscript or poppler).",
+        file=sys.stderr,
+    )
+    return []
+
+
 def cmd_plot(args: argparse.Namespace) -> None:
-    setup_style()
     data_dir = Path(args.data).resolve()
     if not data_dir.exists():
         print(f"Error: data directory not found: {data_dir}", file=sys.stderr)
         sys.exit(1)
-
-    # Resolve symlink (e.g. data/latest -> data/2026-...)
     if data_dir.is_symlink():
         data_dir = data_dir.parent / data_dir.readlink()
 
     print(f"Loading data from {data_dir}")
     meta, data = load_benchmark(data_dir)
-
     if not data:
         print("Error: no benchmark data found.", file=sys.stderr)
         sys.exit(1)
 
     plots_dir = Path("plots")
     plots_dir.mkdir(exist_ok=True)
-    ext = "png" if args.png else "pdf"
 
-    out1 = plot_total_time(data, meta, plots_dir, ext)
-    print(f"  Written: {out1}")
+    snippets = (
+        [gen_total_time_tex(data, meta, plots_dir)]
+        + gen_phase_breakdown_tex(data, meta, plots_dir)
+        + [gen_phase_breakdown_combined_tex(data, meta, plots_dir)]
+    )
+    for s in snippets:
+        print(f"  Generated: {s.name}")
 
-    for out in plot_phase_breakdown(data, meta, plots_dir, ext):
-        print(f"  Written: {out}")
+    plots_tex = gen_plots_tex(snippets, plots_dir)
+    print(f"\n  Compiling {plots_tex.name} ...")
+    pdf = compile_tex(plots_tex)
+    print(f"  Written:   {pdf}")
 
-    out = plot_phase_breakdown_combined(data, meta, plots_dir, ext)
-    print(f"  Written: {out}")
+    if args.png:
+        pngs = pdf_to_png(pdf)
+        for png in pngs:
+            print(f"  Written:   {png}")
 
     print(f"\nDone. Plots in {plots_dir.resolve()}")
 
@@ -568,7 +653,7 @@ def build_parser() -> argparse.ArgumentParser:
     plot.add_argument(
         "--png",
         action="store_true",
-        help="output PNG instead of PDF (useful for previewing in editors)",
+        help="also rasterize each PDF to PNG via Ghostscript (for editor preview)",
     )
 
     return parser
