@@ -23,21 +23,34 @@ IGNORED_PASSES = [
     "Lowering to VIAM",
 ]
 
-SPECS = {
-    # "miniARMv7": "sys/aarch32/miniARMv7.vadl",
-    # "sve": "sys/aarch64/sve.vadl",
-    # "hexagon": "sys/hexagon/hexagon.vadl",
+_HERE = Path(__file__).parent
+
+# Values are either repo-relative strings or absolute Paths (for specs outside the repo).
+SPECS: dict[str, str | Path] = {
+    "miniARMv7": _HERE / "secret_specs" / "miniARMv7.vadl",
+    "sve": "sys/aarch64/sve.vadl",
+    "hexagon": "sys/hexagon/hexagon.vadl",
     "rv32i": "sys/risc-v/rv32i.vadl",
 }
 
 BUILD_CONFIGS = {
     "default": {
         "build_cmd": ["./gradlew", "installDist"],
-        "run_cmd": ["./vadl-cli/build/install/openvadl/bin/openvadl", "check"],
+        "run_cmd": [
+            "./vadl-cli/build/install/openvadl/bin/openvadl",
+            "check",
+            "--decoder",
+            "skip=all",
+        ],
     },
     "native": {
         "build_cmd": ["./gradlew", "nativeCompile"],
-        "run_cmd": ["./vadl-cli/build/native/nativeCompile/openvadl", "check"],
+        "run_cmd": [
+            "./vadl-cli/build/native/nativeCompile/openvadl",
+            "check",
+            "--decoder",
+            "skip=all",
+        ],
     },
 }
 
@@ -136,7 +149,10 @@ def cmd_bench(args: argparse.Namespace) -> None:
 
     for build in builds:
         run_cmd = BUILD_CONFIGS[build]["run_cmd"]
-        for spec_name, spec_path in SPECS.items():
+        for spec_name, spec_raw in SPECS.items():
+            spec_path = str(
+                Path(spec_raw).resolve() if Path(spec_raw).is_absolute() else spec_raw
+            )
             out_dir = run_dir / build / spec_name
             out_dir.mkdir(parents=True)
 
@@ -354,7 +370,6 @@ def compile_tex(tex_path: Path) -> Path:
         print(f"pdflatex error for {tex_path.name}:\n{detail}", file=sys.stderr)
         sys.exit(1)
     return pdf_path
-
 
 
 def gen_total_time_tex(data: dict, meta: dict, plots_dir: Path) -> Path:
