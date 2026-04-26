@@ -27,10 +27,11 @@ _HERE = Path(__file__).parent
 
 # Values are either repo-relative strings or absolute Paths (for specs outside the repo).
 SPECS: dict[str, str | Path] = {
-    "miniARMv7": _HERE / "secret_specs" / "miniARMv7.vadl",
-    "sve": "sys/aarch64/sve.vadl",
-    "hexagon": "sys/hexagon/hexagon.vadl",
+    "ppc64": "sys/ppc64/ppc64.vadl",
     "rv32i": "sys/risc-v/rv32i.vadl",
+    "hexagon": "sys/hexagon/hexagon.vadl",
+    "sve": "sys/aarch64/sve.vadl",
+    "miniARMv7": _HERE / "secret_specs" / "miniARMv7.vadl",
 }
 
 BUILD_CONFIGS = {
@@ -430,15 +431,33 @@ def gen_total_time_tex(data: dict, meta: dict, plots_dir: Path) -> Path:
     return out
 
 
+def _phase_means(
+    phases: list[str], build_data: dict, specs: list[str]
+) -> dict[str, dict[str, float]]:
+    """Return means[spec][phase] normalized so each spec's phases sum to 1."""
+    raw: dict[str, dict[str, float]] = {
+        spec: {
+            phase: statistics.mean(
+                [r[phase] for r in build_data.get(spec, []) if phase in r] or [0]
+            )
+            for phase in phases
+        }
+        for spec in specs
+    }
+    for spec in specs:
+        total = sum(raw[spec].values()) or 1.0
+        for phase in phases:
+            raw[spec][phase] /= total
+    return raw
+
+
 def _stacked_addplots(
     phases: list[str], build_data: dict, specs: list[str], first: bool
 ) -> str:
+    means = _phase_means(phases, build_data, specs)
     lines = []
     for i, phase in enumerate(phases):
-        coords = " ".join(
-            f"({spec},{statistics.mean([r[phase] for r in build_data.get(spec, []) if phase in r] or [0]):.2f})"
-            for spec in specs
-        )
+        coords = " ".join(f"({spec},{means[spec][phase]:.4f})" for spec in specs)
         entry = f"\\addlegendentry{{{phase}}}" if first else ""
         lines.append(f"\\addplot[{_pgf_style(i)}] coordinates {{{coords}}};\n{entry}")
     return "\n".join(lines)
@@ -464,8 +483,9 @@ def gen_phase_breakdown_tex(data: dict, meta: dict, plots_dir: Path) -> list[Pat
             + f"    symbolic x coords={{{sym}}},\n"
             + "    xtick=data,\n"
             + "    enlarge x limits=0.2,\n"
+            + "    ymin=0, ymax=1,\n"
             + "    xlabel={Specification},\n"
-            + "    ylabel={Compile time (ms)},\n"
+            + "    ylabel={Fraction of compile time},\n"
             + f"    title={{Phase breakdown --- {build} build}},\n"
             + "    legend style={at={(1.02,1)},anchor=north west,font=\\small},\n"
             + _AXIS_BASE
@@ -500,11 +520,15 @@ def gen_phase_breakdown_combined_tex(data: dict, meta: dict, plots_dir: Path) ->
     ]
     xmax = bar_pos(len(specs) - 1, n_builds - 1) + gap / 2
 
+    # Normalized means: means[build][spec][phase] sums to 1 per (build, spec)
+    norm: dict[str, dict[str, dict[str, float]]] = {
+        build: _phase_means(phases, data[build], specs) for build in builds
+    }
+
     addplots = []
     for pi, phase in enumerate(phases):
         coords = " ".join(
-            f"({bar_pos(si, bi):.1f},"
-            f"{statistics.mean([r[phase] for r in data[build].get(spec, []) if phase in r] or [0]):.2f})"
+            f"({bar_pos(si, bi):.1f},{norm[build][spec][phase]:.4f})"
             for si, spec in enumerate(specs)
             for bi, build in enumerate(builds)
         )
@@ -534,8 +558,9 @@ def gen_phase_breakdown_combined_tex(data: dict, meta: dict, plots_dir: Path) ->
         + f"    extra x ticks={{{extra_ticks}}},\n"
         + f"    extra x tick labels={{{extra_labels}}},\n"
         + "    extra x tick style={tick label style={font=\\tiny,rotate=45,anchor=north east}},\n"
+        + "    ymin=0, ymax=1,\n"
         + "    xlabel={Specification},\n"
-        + "    ylabel={Compile time (ms)},\n"
+        + "    ylabel={Fraction of compile time},\n"
         + "    title={Phase breakdown --- all builds},\n"
         + "    legend style={at={(1.02,1)},anchor=north west,font=\\small},\n"
         + _AXIS_BASE
