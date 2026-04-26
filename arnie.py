@@ -27,8 +27,8 @@ _HERE = Path(__file__).parent
 
 # Values are either repo-relative strings or absolute Paths (for specs outside the repo).
 SPECS: dict[str, str | Path] = {
-    "ppc64": "sys/ppc64/ppc64.vadl",
     "rv32i": "sys/risc-v/rv32i.vadl",
+    "ppc64": "sys/ppc64/ppc64.vadl",
     "hexagon": "sys/hexagon/hexagon.vadl",
     "sve": "sys/aarch64/sve.vadl",
     "miniARMv7": _HERE / "secret_specs" / "miniARMv7.vadl",
@@ -269,6 +269,12 @@ def load_spec_stats(data_dir: Path) -> dict[str, dict[str, int]]:
     return stats
 
 
+def _specs_ordered(available: dict) -> list[str]:
+    """Return spec names in SPECS declaration order, filtering to those present."""
+    present = set(available.keys())
+    return [s for s in SPECS if s in present]
+
+
 # pgfplots fill colour + hatch pattern per series index
 PGF_STYLES = [
     ("blue!40!white", "north east lines"),
@@ -375,7 +381,7 @@ def compile_tex(tex_path: Path) -> Path:
 
 def gen_total_time_tex(data: dict, meta: dict, plots_dir: Path) -> Path:
     builds = list(data.keys())
-    specs = list(next(iter(data.values())).keys())
+    specs = _specs_ordered(next(iter(data.values())))
     commit = meta.get("open_vadl_commit", "")[:12]
     runs_n = meta.get("runs", "?")
 
@@ -464,7 +470,7 @@ def _stacked_addplots(
 
 
 def gen_phase_breakdown_tex(data: dict, meta: dict, plots_dir: Path) -> list[Path]:
-    specs = list(next(iter(data.values())).keys())
+    specs = _specs_ordered(next(iter(data.values())))
     phases = allowed_phases(data)
     commit = meta.get("open_vadl_commit", "")[:12]
     runs_n = meta.get("runs", "?")
@@ -504,7 +510,7 @@ def gen_phase_breakdown_tex(data: dict, meta: dict, plots_dir: Path) -> list[Pat
 
 def gen_phase_breakdown_combined_tex(data: dict, meta: dict, plots_dir: Path) -> Path:
     builds = list(data.keys())
-    specs = list(next(iter(data.values())).keys())
+    specs = _specs_ordered(next(iter(data.values())))
     phases = allowed_phases(data)
     commit = meta.get("open_vadl_commit", "")[:12]
     runs_n = meta.get("runs", "?")
@@ -590,7 +596,7 @@ _STAT_LABELS: dict[str, str] = {
 def gen_spec_stats_table_tex(
     spec_stats: dict[str, dict[str, int]], plots_dir: Path
 ) -> Path:
-    specs = list(spec_stats.keys())
+    specs = _specs_ordered(spec_stats)
     all_stats = list(_STAT_LABELS.keys())
 
     col_spec = "|l||" + "r|" * len(specs)
