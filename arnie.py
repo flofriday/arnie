@@ -1,5 +1,6 @@
 import argparse
 import csv
+import os
 import platform
 import shutil
 import statistics
@@ -25,33 +26,84 @@ IGNORED_PASSES = [
 
 _HERE = Path(__file__).parent
 
-# Values are either repo-relative strings or absolute Paths (for specs outside the repo).
-SPECS: dict[str, str | Path] = {
-    "rv32i": "sys/risc-v/rv32i.vadl",
-    "ppc64": "sys/ppc64/ppc64.vadl",
-    "hexagon": "sys/hexagon/hexagon.vadl",
-    "sve": "sys/aarch64/sve.vadl",
-    "miniARMv7": _HERE / "secret_specs" / "miniARMv7.vadl",
+# Per-spec paths, keyed by compiler family. Specs without an entry for a given
+# family are skipped for builds belonging to that family.
+SPECS: dict[str, dict[str, str | Path]] = {
+    "rv32i": {
+        "openvadl": "sys/risc-v/rv32i.vadl",
+    },
+    "ppc64": {
+        "openvadl": "sys/ppc64/ppc64.vadl",
+    },
+    "hexagon": {
+        "openvadl": "sys/hexagon/hexagon.vadl",
+        "original": "sys/hexagon/src/hexagon.vadl",
+    },
+    "sve": {
+        "openvadl": "sys/aarch64/sve.vadl",
+    },
+    "miniARMv7": {
+        "openvadl": _HERE / "secret_specs" / "miniARMv7.vadl",
+        "original": "sys/aarch32/src/miniARMv7.vadl",
+    },
 }
 
-BUILD_CONFIGS = {
-    "default": {
+# Each build defines its own family, repo, build/run commands, and where it
+# writes its timings/stats CSVs (relative to the repo cwd).
+# `<SPEC>` in run_cmd is replaced with the resolved spec path at run time.
+BUILD_CONFIGS: dict[str, dict] = {
+    "graalvm": {
+        "family": "openvadl",
+        "repo_key": "open_vadl_path",
         "build_cmd": ["./gradlew", "installDist"],
+        "build_env": None,
         "run_cmd": [
             "./vadl-cli/build/install/openvadl/bin/openvadl",
             "check",
             "--decoder",
             "skip=all",
+            "<SPEC>",
+            "--timings-csv",
+            "--spec-stats-csv",
         ],
+        "timings_file": "output/timings.csv",
+        "stats_file": "output/spec-stats.csv",
     },
     "native": {
+        "family": "openvadl",
+        "repo_key": "open_vadl_path",
         "build_cmd": ["./gradlew", "nativeCompile"],
+        "build_env": None,
         "run_cmd": [
             "./vadl-cli/build/native/nativeCompile/openvadl",
             "check",
             "--decoder",
             "skip=all",
+            "<SPEC>",
+            "--timings-csv",
+            "--spec-stats-csv",
         ],
+        "timings_file": "output/timings.csv",
+        "stats_file": "output/spec-stats.csv",
+    },
+    "original": {
+        "family": "original",
+        "repo_key": "original_vadl_path",
+        "build_cmd": ["make", "build"],
+        "build_env": "java17",  # resolved lazily via /usr/libexec/java_home -v17
+        "run_cmd": ["./obj/bin/vadl", "--pass-stats-csv=timings.csv", "<SPEC>"],
+        "timings_file": "timings.csv",
+        "stats_file": None,
+    },
+}
+
+# Maps a build family's raw pass names to canonical (openVADL) names. Passes not
+# in the map are kept as-is. Passes mapped to the same canonical name are summed.
+PASS_RENAME: dict[str, dict[str, str]] = {
+    "openvadl": {},  # canonical, no renaming
+    "original": {
+        # TODO: populate after first 'arnie bench' captures real names
+        # "Original Pass Name": "OpenVADL Phase Name",
     },
 }
 
@@ -63,12 +115,18 @@ def load_config() -> dict:
         return tomllib.load(f)
 
 
-def require_repo() -> Path:
+def require_repos(repo_keys: set[str]) -> dict[str, Path]:
+    """Return a {repo_key: Path} map for the given keys; exits if any are missing."""
     config = load_config()
-    if "open_vadl_path" not in config:
-        print("Error: run 'arnie config' first.", file=sys.stderr)
+    missing = [k for k in repo_keys if k not in config]
+    if missing:
+        print(
+            f"Error: missing config keys: {', '.join(missing)}. "
+            "Run 'arnie config' first.",
+            file=sys.stderr,
+        )
         sys.exit(1)
-    return Path(config["open_vadl_path"])
+    return {k: Path(config[k]) for k in repo_keys}
 
 
 def git_commit(repo: Path) -> str:
@@ -83,7 +141,6 @@ def git_commit(repo: Path) -> str:
 
 def cmd_config(args: argparse.Namespace) -> None:
     config = load_config()
-    current_open_vadl = config.get("open_vadl_path", "")
 
     def prompt(label: str, current: str) -> str:
         hint = f" [{current}]" if current else ""
@@ -94,23 +151,25 @@ def cmd_config(args: argparse.Namespace) -> None:
             sys.exit(1)
         return value if value else current
 
-    print("Configure compiler repository path (absolute path).\n")
-    open_vadl_path = prompt("openVADL repository path", current_open_vadl)
+    def resolve_dir(label: str, raw: str) -> Path:
+        if not raw:
+            print(f"Error: {label} is required.", file=sys.stderr)
+            sys.exit(1)
+        path = Path(raw).expanduser()
+        if not path.is_dir():
+            print(f"Error: {label} does not exist: {path}", file=sys.stderr)
+            sys.exit(1)
+        return path.resolve()
 
-    if not open_vadl_path:
-        print("Error: path is required.", file=sys.stderr)
-        sys.exit(1)
-
-    open_vadl_resolved = Path(open_vadl_path).expanduser()
-    if not open_vadl_resolved.is_dir():
-        print(
-            f"Error: openVADL path does not exist: {open_vadl_resolved}",
-            file=sys.stderr,
-        )
-        sys.exit(1)
+    print("Configure compiler repository paths (absolute paths).\n")
+    open_vadl = prompt("openVADL repository path", config.get("open_vadl_path", ""))
+    original_vadl = prompt(
+        "Original VADL repository path", config.get("original_vadl_path", "")
+    )
 
     config.pop("vadl_path", None)
-    config["open_vadl_path"] = str(open_vadl_resolved.resolve())
+    config["open_vadl_path"] = str(resolve_dir("openVADL path", open_vadl))
+    config["original_vadl_path"] = str(resolve_dir("Original VADL path", original_vadl))
 
     with CONFIG_FILE.open("wb") as f:
         tomli_w.dump(config, f)
@@ -118,15 +177,45 @@ def cmd_config(args: argparse.Namespace) -> None:
     print(f"\nSaved config to {CONFIG_FILE.resolve()}")
 
 
-def cmd_bench(args: argparse.Namespace) -> None:
-    repo = require_repo()
-    builds = args.build or list(BUILD_CONFIGS.keys())
+def _resolve_build_env(env_spec) -> dict | None:
+    if env_spec is None:
+        return None
+    if env_spec == "java17":
+        result = subprocess.run(
+            ["/usr/libexec/java_home", "-v17"],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            print(
+                "Error: could not find Java 17 via /usr/libexec/java_home -v17.\n"
+                f"{result.stderr}",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        return {**os.environ, "JAVA_HOME": result.stdout.strip()}
+    if isinstance(env_spec, dict):
+        return {**os.environ, **env_spec}
+    raise ValueError(f"unknown build_env spec: {env_spec!r}")
 
-    commit = git_commit(repo)
+
+def _spec_path_for(spec_raw: str | Path) -> str:
+    """Resolve a spec path: absolute Paths kept as-is, strings stay repo-relative."""
+    p = Path(spec_raw)
+    return str(p.resolve()) if p.is_absolute() else str(spec_raw)
+
+
+def cmd_bench(args: argparse.Namespace) -> None:
+    builds = args.build or list(BUILD_CONFIGS.keys())
+    repo_keys = {BUILD_CONFIGS[b]["repo_key"] for b in builds}
+    repos = require_repos(repo_keys)
+
     timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
     run_dir = DATA_DIR / timestamp
 
-    print(f"openVADL commit: {commit}")
+    commits = {key: git_commit(path) for key, path in repos.items()}
+    for key, commit in commits.items():
+        print(f"{key}: {commit}")
     print(f"Builds: {', '.join(builds)}")
     print(f"Specs:  {', '.join(SPECS.keys())}")
     print(f"Runs:   {args.warmup} warmup + {args.runs} measured\n")
@@ -138,36 +227,47 @@ def cmd_bench(args: argparse.Namespace) -> None:
 
     if not args.no_build:
         for build in builds:
+            cfg = BUILD_CONFIGS[build]
+            repo = repos[cfg["repo_key"]]
+            env = _resolve_build_env(cfg["build_env"])
             print(f"==> Building {build}...")
-            result = subprocess.run(
-                BUILD_CONFIGS[build]["build_cmd"],
-                cwd=repo,
-            )
+            result = subprocess.run(cfg["build_cmd"], cwd=repo, env=env)
             if result.returncode != 0:
                 print(f"Error: {build} build failed.", file=sys.stderr)
                 sys.exit(1)
         print()
 
     for build in builds:
-        run_cmd = BUILD_CONFIGS[build]["run_cmd"]
-        for spec_name, spec_raw in SPECS.items():
-            spec_path = str(
-                Path(spec_raw).resolve() if Path(spec_raw).is_absolute() else spec_raw
-            )
+        cfg = BUILD_CONFIGS[build]
+        family = cfg["family"]
+        repo = repos[cfg["repo_key"]]
+        run_cmd_template = cfg["run_cmd"]
+        timings_src = repo / cfg["timings_file"]
+        stats_src = repo / cfg["stats_file"] if cfg["stats_file"] else None
+
+        for spec_name, family_paths in SPECS.items():
+            if family not in family_paths:
+                print(f"  [{build}/{spec_name}] (skipped — no spec for {family})")
+                continue
+
+            spec_path = _spec_path_for(family_paths[family])
             out_dir = run_dir / build / spec_name
             out_dir.mkdir(parents=True)
+
+            run_cmd = [spec_path if a == "<SPEC>" else a for a in run_cmd_template]
 
             total = args.warmup + args.runs
             for i in range(1, total + 1):
                 is_warmup = i <= args.warmup
-                if is_warmup:
-                    label = f"warmup {i}/{args.warmup}"
-                else:
-                    label = f"run {i - args.warmup}/{args.runs}"
+                label = (
+                    f"warmup {i}/{args.warmup}"
+                    if is_warmup
+                    else f"run {i - args.warmup}/{args.runs}"
+                )
                 print(f"  [{build}/{spec_name}] {label}")
 
                 result = subprocess.run(
-                    run_cmd + [spec_path, "--timings-csv", "--spec-stats-csv"],
+                    run_cmd,
                     cwd=repo,
                     capture_output=True,
                 )
@@ -181,21 +281,18 @@ def cmd_bench(args: argparse.Namespace) -> None:
                     )
                     sys.exit(1)
 
-                src = repo / "output" / "timings.csv"
                 dst = out_dir / (
                     f"warmup_{i}.csv" if is_warmup else f"run_{i - args.warmup}.csv"
                 )
-                shutil.move(src, dst)
+                shutil.move(timings_src, dst)
 
-                if i == 1:
-                    stats_src = repo / "output" / "spec-stats.csv"
-                    if stats_src.exists():
-                        shutil.copy(stats_src, out_dir / "spec-stats.csv")
+                if i == 1 and stats_src and stats_src.exists():
+                    shutil.copy(stats_src, out_dir / "spec-stats.csv")
 
     metadata = {
         "timestamp": timestamp,
-        "open_vadl_commit": commit,
-        "open_vadl_path": str(repo),
+        "commits": commits,
+        "repos": {k: str(v) for k, v in repos.items()},
         "runs": args.runs,
         "warmup": args.warmup,
         "builds": builds,
@@ -217,13 +314,22 @@ def cmd_bench(args: argparse.Namespace) -> None:
     print(f"       Symlink: {latest} -> {timestamp}")
 
 
-def load_runs(spec_dir: Path) -> list[dict[str, float]]:
-    """Return one pass->ms dict per measured run (warmup files excluded)."""
+def load_runs(spec_dir: Path, family: str = "openvadl") -> list[dict[str, float]]:
+    """Return one pass->ms dict per measured run (warmup files excluded).
+
+    Pass names are renamed via PASS_RENAME[family]; passes that map to the same
+    canonical name are summed.
+    """
+    rename = PASS_RENAME.get(family, {})
     runs = []
     for f in sorted(spec_dir.glob("run_*.csv")):
         with f.open(newline="") as fh:
             reader = csv.DictReader(fh)
-            runs.append({row["pass"]: float(row["duration_ms"]) for row in reader})
+            run: dict[str, float] = {}
+            for row in reader:
+                name = rename.get(row["pass"], row["pass"])
+                run[name] = run.get(name, 0.0) + float(row["duration_ms"])
+            runs.append(run)
     return runs
 
 
@@ -241,10 +347,11 @@ def load_benchmark(data_dir: Path) -> tuple[dict, dict]:
         if not build_dir.is_dir() or build_dir.name == "latest":
             continue
         build = build_dir.name
+        family = BUILD_CONFIGS.get(build, {}).get("family", "openvadl")
         data[build] = {}
         for spec_dir in sorted(build_dir.iterdir()):
             if spec_dir.is_dir():
-                runs = load_runs(spec_dir)
+                runs = load_runs(spec_dir, family)
                 if runs:
                     data[build][spec_dir.name] = runs
     return meta, data
@@ -339,7 +446,9 @@ def allowed_phases(data: dict) -> list[str]:
 
 
 def gen_preamble_tex(meta: dict, plots_dir: Path) -> Path:
-    commit = meta.get("open_vadl_commit", "unknown")[:12]
+    commits = meta.get("commits", {})
+    open_commit = commits.get("open_vadl_path", "unknown")[:12]
+    orig_commit = commits.get("original_vadl_path", "unknown")[:12]
     runs_n = meta.get("runs", "?")
     warmup_n = meta.get("warmup", "?")
     date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
@@ -350,10 +459,15 @@ def gen_preamble_tex(meta: dict, plots_dir: Path) -> Path:
     tex = (
         f"% Autogenerated by arnie on {date}\n"
         f"All benchmarks were executed on {MACHINE}.\n"
-        f"The \\texttt{{openVADL}} compiler was evaluated at commit \\texttt{{{commit}}}.\n"
+        f"\\texttt{{openVADL}} (commit \\texttt{{{open_commit}}}) was evaluated in two\n"
+        f"configurations: a JVM distribution running on GraalVM, and an ahead-of-time\n"
+        f"compiled GraalVM Native Image. The \\texttt{{Original VADL}} compiler\n"
+        f"(commit \\texttt{{{orig_commit}}}) serves as a baseline and is only run on\n"
+        f"specifications that exist in its (older) input language.\n"
         f"Each specification was measured over ${warmup_n}$~warmup runs followed by\n"
-        f"${runs_n}$~timed runs using the compiler-internal \\texttt{{--timings-csv}} facility,\n"
-        f"which records per-pass wall-clock time.\n"
+        f"${runs_n}$~timed runs using the compiler-internal pass-timing facilities\n"
+        f"(\\texttt{{--timings-csv}} for openVADL, \\texttt{{--pass-stats-csv}} for\n"
+        f"Original VADL), which record per-pass wall-clock time.\n"
         f"Infrastructure passes ({ignored_vdt}, {ignored}) were excluded from all aggregates.\n"
     )
     out = plots_dir / "preamble.tex"
@@ -382,7 +496,7 @@ def compile_tex(tex_path: Path) -> Path:
 def gen_total_time_tex(data: dict, meta: dict, plots_dir: Path) -> Path:
     builds = list(data.keys())
     specs = _specs_ordered(next(iter(data.values())))
-    commit = meta.get("open_vadl_commit", "")[:12]
+    commit = meta.get("commits", {}).get("open_vadl_path", "")[:12]
     runs_n = meta.get("runs", "?")
 
     means: dict[str, list[float]] = {}
@@ -472,7 +586,7 @@ def _stacked_addplots(
 def gen_phase_breakdown_tex(data: dict, meta: dict, plots_dir: Path) -> list[Path]:
     specs = _specs_ordered(next(iter(data.values())))
     phases = allowed_phases(data)
-    commit = meta.get("open_vadl_commit", "")[:12]
+    commit = meta.get("commits", {}).get("open_vadl_path", "")[:12]
     runs_n = meta.get("runs", "?")
     sym = ",".join(specs)
     outputs = []
@@ -512,7 +626,7 @@ def gen_phase_breakdown_combined_tex(data: dict, meta: dict, plots_dir: Path) ->
     builds = list(data.keys())
     specs = _specs_ordered(next(iter(data.values())))
     phases = allowed_phases(data)
-    commit = meta.get("open_vadl_commit", "")[:12]
+    commit = meta.get("commits", {}).get("open_vadl_path", "")[:12]
     runs_n = meta.get("runs", "?")
 
     n_builds = len(builds)
@@ -746,7 +860,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     subparsers.add_parser(
         "config",
-        help="create or update config.toml with the openVADL repository path",
+        help="create or update config.toml with the compiler repository paths",
         color=True,
     )
 
@@ -774,7 +888,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="append",
         choices=list(BUILD_CONFIGS.keys()),
         metavar="TYPE",
-        help="build type to include: default, native (repeatable; default: both)",
+        help=(
+            "build to include: "
+            + ", ".join(BUILD_CONFIGS.keys())
+            + " (repeatable; default: all)"
+        ),
     )
     bench.add_argument(
         "--no-build",
