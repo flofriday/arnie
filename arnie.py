@@ -22,6 +22,7 @@ IGNORED_PASSES = [
     "ViamVerificationPass",
     "VIAM Creation (pseudo pass)",
     "Lowering to VIAM",
+    "hidden",
 ]
 
 _HERE = Path(__file__).parent
@@ -51,7 +52,22 @@ SPECS: dict[str, dict[str, str | Path]] = {
 # Each build defines its own family, repo, build/run commands, and where it
 # writes its timings/stats CSVs (relative to the repo cwd).
 # `<SPEC>` in run_cmd is replaced with the resolved spec path at run time.
+BUILD_LABELS: dict[str, str] = {
+    "original": "Original VADL",
+    "graalvm": "OpenVADL GraalVM",
+    "native": "OpenVADL Native Image",
+}
+
 BUILD_CONFIGS: dict[str, dict] = {
+    "original": {
+        "family": "original",
+        "repo_key": "original_vadl_path",
+        "build_cmd": ["make", "build"],
+        "build_env": "java17",  # resolved lazily via /usr/libexec/java_home -v17
+        "run_cmd": ["./obj/bin/vadl", "--pass-stats-csv=timings.csv", "<SPEC>"],
+        "timings_file": "timings.csv",
+        "stats_file": None,
+    },
     "graalvm": {
         "family": "openvadl",
         "repo_key": "open_vadl_path",
@@ -86,15 +102,6 @@ BUILD_CONFIGS: dict[str, dict] = {
         "timings_file": "output/timings.csv",
         "stats_file": "output/spec-stats.csv",
     },
-    "original": {
-        "family": "original",
-        "repo_key": "original_vadl_path",
-        "build_cmd": ["make", "build"],
-        "build_env": "java17",  # resolved lazily via /usr/libexec/java_home -v17
-        "run_cmd": ["./obj/bin/vadl", "--pass-stats-csv=timings.csv", "<SPEC>"],
-        "timings_file": "timings.csv",
-        "stats_file": None,
-    },
 }
 
 # Maps a build family's raw pass names to canonical (openVADL) names. Passes not
@@ -104,6 +111,29 @@ PASS_RENAME: dict[str, dict[str, str]] = {
     "original": {
         # TODO: populate after first 'arnie bench' captures real names
         # "Original Pass Name": "OpenVADL Phase Name",
+        "ConfigurationPass": "hidden",
+        "SourceToCstPass": "Parsing",
+        "CstResourcePass": "Parsing",
+        "CstTemplateRegistrationPass": "Parsing",
+        "CstModelReplacementPass": "Model Removing",
+        "CstModelInstancePass": "Macro Expanding",
+        "CstValidationPass": "Parsing",
+        "CstToAstPass": "Parsing",
+        "AstSourceLocationPass": "Parsing",
+        "AstAnnotationPass": "Parsing",
+        "AstSymbolRegistrationPass": "Symbol Resolution",
+        "AstModuleLoaderPass": "Parsing",
+        "AstModuleMergerPass": "Modul Merging",
+        "AstPipelineSplittingPass": "Parsing",
+        "AstSymbolResolverPass": "Symbol Resolution",
+        "AstRAIIPass": "RAII",
+        "AstRecursiveCallDetectionPass": "Type Checking",
+        "DefaultGrammarInjectionPass": "Parsing",
+        "AstOperationAnnotationPass": "Parsing",
+        "AstTypeInferencePass": "Type Checking",
+        "AstLoweringPass": "hidden",
+        "AstValidationPass": "hidden",
+        "Total": "hidden",
     },
 }
 
@@ -382,6 +412,12 @@ def _specs_ordered(available: dict) -> list[str]:
     return [s for s in SPECS if s in present]
 
 
+def _builds_ordered(available: dict) -> list[str]:
+    """Return build names in BUILD_CONFIGS declaration order, filtering to those present."""
+    present = set(available.keys())
+    return [b for b in BUILD_CONFIGS if b in present]
+
+
 # pgfplots fill colour + hatch pattern per series index
 PGF_STYLES = [
     ("blue!40!white", "north east lines"),
@@ -494,7 +530,7 @@ def compile_tex(tex_path: Path) -> Path:
 
 
 def gen_total_time_tex(data: dict, meta: dict, plots_dir: Path) -> Path:
-    builds = list(data.keys())
+    builds = _builds_ordered(data)
     specs = _specs_ordered(next(iter(data.values())))
     commit = meta.get("commits", {}).get("open_vadl_path", "")[:12]
     runs_n = meta.get("runs", "?")
@@ -520,7 +556,7 @@ def gen_total_time_tex(data: dict, meta: dict, plots_dir: Path) -> Path:
             f"\\addplot[{_pgf_style(i)}]\n"
             f"    plot[error bars/.cd, y dir=both, y explicit]\n"
             f"    coordinates {{{coords}}};\n"
-            f"\\addlegendentry{{{build}}}"
+            f"\\addlegendentry{{{BUILD_LABELS.get(build, build)}}}"
         )
 
     sym = ",".join(specs)
@@ -536,9 +572,8 @@ def gen_total_time_tex(data: dict, meta: dict, plots_dir: Path) -> Path:
         + "    xtick=data,\n"
         + "    enlarge x limits=0.2,\n"
         + "    xlabel={Specification},\n"
-        + "    ylabel={Compile time (ms)},\n"
-        + "    title={Total compile time},\n"
-        + "    legend style={at={(0.5,-0.15)},anchor=north,legend columns=-1},\n"
+        + "    ylabel={Compile time in ms (lower is better)},\n"
+        + "    legend style={at={(1.02,1)},anchor=north west,nodes={anchor=west},font=\\small},\n"
         + _AXIS_BASE
         + "]\n"
         + body
@@ -547,6 +582,43 @@ def gen_total_time_tex(data: dict, meta: dict, plots_dir: Path) -> Path:
         + "\\end{tikzpicture}\n"
     )
     out = plots_dir / "total_time.tex"
+    out.write_text(tex)
+    return out
+
+
+def gen_total_time_table_tex(data: dict, plots_dir: Path) -> Path:
+    builds = _builds_ordered(data)
+    specs = _specs_ordered(next(iter(data.values())))
+
+    col_spec = "l" + "r" * len(builds)
+    header = " & ".join(
+        ["\\textbf{Specification}"]
+        + [f"\\textbf{{{BUILD_LABELS.get(b, b)}}} (ms)" for b in builds]
+    )
+
+    rows = []
+    for spec in specs:
+        cells = []
+        for build in builds:
+            totals = [_allowed_total(r) for r in data[build].get(spec, [])]
+            if totals:
+                mean = statistics.mean(totals)
+                std = statistics.stdev(totals) if len(totals) > 1 else 0.0
+                cells.append(f"{mean:.1f} $\\pm$ {std:.1f}")
+            else:
+                cells.append("---")
+        rows.append(f"    {spec} & {' & '.join(cells)} \\\\")
+
+    tex = (
+        "% Autogenerated by arnie\n"
+        "\\begin{tabular}{" + col_spec + "}\n"
+        "\\toprule\n"
+        f"    {header} \\\\\n"
+        "\\midrule\n" + "\n".join(rows) + "\n"
+        "\\bottomrule\n"
+        "\\end{tabular}\n"
+    )
+    out = plots_dir / "total_time_table.tex"
     out.write_text(tex)
     return out
 
@@ -606,7 +678,6 @@ def gen_phase_breakdown_tex(data: dict, meta: dict, plots_dir: Path) -> list[Pat
             + "    ymin=0, ymax=1,\n"
             + "    xlabel={Specification},\n"
             + "    ylabel={Fraction of compile time},\n"
-            + f"    title={{Phase breakdown --- {build} build}},\n"
             + "    legend style={at={(1.02,1)},anchor=north west,font=\\small},\n"
             + _AXIS_BASE
             + "]\n"
@@ -623,7 +694,7 @@ def gen_phase_breakdown_tex(data: dict, meta: dict, plots_dir: Path) -> list[Pat
 
 
 def gen_phase_breakdown_combined_tex(data: dict, meta: dict, plots_dir: Path) -> Path:
-    builds = list(data.keys())
+    builds = _builds_ordered(data)
     specs = _specs_ordered(next(iter(data.values())))
     phases = allowed_phases(data)
     commit = meta.get("commits", {}).get("open_vadl_path", "")[:12]
@@ -681,7 +752,6 @@ def gen_phase_breakdown_combined_tex(data: dict, meta: dict, plots_dir: Path) ->
         + "    ymin=0, ymax=1,\n"
         + "    xlabel={Specification},\n"
         + "    ylabel={Fraction of compile time},\n"
-        + "    title={Phase breakdown --- all builds},\n"
         + "    legend style={at={(1.02,1)},anchor=north west,font=\\small},\n"
         + _AXIS_BASE
         + "]\n"
@@ -713,7 +783,7 @@ def gen_spec_stats_table_tex(
     specs = _specs_ordered(spec_stats)
     all_stats = list(_STAT_LABELS.keys())
 
-    col_spec = "|l||" + "r|" * len(specs)
+    col_spec = "|l" + "|r" * len(specs) + "|"
     header = " & ".join(["\\textbf{Metric}"] + [f"\\textbf{{{s}}}" for s in specs])
 
     rows = []
@@ -736,28 +806,37 @@ def gen_spec_stats_table_tex(
     return out
 
 
+def _table_block(table: Path | None) -> str:
+    if not table:
+        return ""
+    return (
+        f"\\begin{{table}}[H]\n\\centering\n\\input{{{table.name}}}\n\\end{{table}}\n"
+    )
+
+
 def gen_plots_tex(
     preamble: Path,
     snippet_paths: list[Path],
     plots_dir: Path,
     table: Path | None = None,
+    appendix_tables: list[Path] | None = None,
 ) -> Path:
     figures = "\n".join(
         f"\\begin{{figure}}[H]\n\\centering\n\\input{{{p.name}}}\n\\end{{figure}}"
         for p in snippet_paths
     )
-    table_block = (
-        f"\n\\begin{{table}}[H]\n\\centering\n\\input{{{table.name}}}\n\\end{{table}}\n"
-        if table
-        else ""
-    )
+    appendix_block = ""
+    if appendix_tables:
+        appendix_body = "\n".join(_table_block(t) for t in appendix_tables)
+        appendix_block = "\n\\appendix\n\\section{Raw Data}\n" + appendix_body
     tex = (
         _PLOTS_TEX
         + "\\begin{document}\n"
         + f"\\input{{{preamble.name}}}\n"
-        + table_block
+        + _table_block(table)
         + "\n"
         + figures
+        + appendix_block
         + "\n"
         + "\\end{document}\n"
     )
@@ -836,7 +915,10 @@ def cmd_plot(args: argparse.Namespace) -> None:
     for s in snippets:
         print(f"  Generated: {s.name}")
 
-    plots_tex = gen_plots_tex(preamble, snippets, plots_dir, table)
+    total_time_table = gen_total_time_table_tex(data, plots_dir)
+    print(f"  Generated: {total_time_table.name}")
+
+    plots_tex = gen_plots_tex(preamble, snippets, plots_dir, table, [total_time_table])
     print(f"\n  Compiling {plots_tex.name} ...")
     pdf = compile_tex(plots_tex)
     print(f"  Written:   {pdf}")
