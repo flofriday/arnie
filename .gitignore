@@ -14,3 +14,4 @@ config.toml
 
 data/
 plots/
+arnie.py

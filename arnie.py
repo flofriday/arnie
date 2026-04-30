@@ -52,11 +52,6 @@ SPECS: dict[str, dict[str, str | Path]] = {
 # Each build defines its own family, repo, build/run commands, and where it
 # writes its timings/stats CSVs (relative to the repo cwd).
 # `<SPEC>` in run_cmd is replaced with the resolved spec path at run time.
-BUILD_LABELS: dict[str, str] = {
-    "original": "Original VADL",
-    "graalvm": "OpenVADL GraalVM",
-    "native": "OpenVADL Native Image",
-}
 
 BUILD_CONFIGS: dict[str, dict] = {
     "original": {
@@ -428,6 +423,9 @@ PGF_STYLES = [
     ("teal!50!white", "dots"),
     ("brown!40!white", "grid"),
     ("cyan!40!white", "crosshatch dots"),
+    ("yellow!60!white", "bricks"),
+    ("magenta!40!white", "fivepointed stars"),
+    ("olive!50!white", "sixpointed stars"),
 ]
 
 # Preamble for plots.tex — the single compiled document
@@ -551,12 +549,13 @@ def gen_total_time_tex(data: dict, meta: dict, plots_dir: Path) -> Path:
         coords = " ".join(
             f"({spec},{means[build][j]:.2f}) +- (0,{errs[build][j]:.2f})"
             for j, spec in enumerate(specs)
+            if data[build].get(spec)
         )
         addplots.append(
             f"\\addplot[{_pgf_style(i)}]\n"
             f"    plot[error bars/.cd, y dir=both, y explicit]\n"
             f"    coordinates {{{coords}}};\n"
-            f"\\addlegendentry{{{BUILD_LABELS.get(build, build)}}}"
+            f"\\addlegendentry{{{build}}}"
         )
 
     sym = ",".join(specs)
@@ -569,12 +568,17 @@ def gen_total_time_tex(data: dict, meta: dict, plots_dir: Path) -> Path:
         + "    bar width=14pt,\n"
         + "    width=14cm, height=7cm,\n"
         + f"    symbolic x coords={{{sym}}},\n"
-        + "    xtick=data,\n"
+        + f"    xtick={{{sym}}},\n"
         + "    enlarge x limits=0.2,\n"
         + "    xlabel={Specification},\n"
-        + "    ylabel={Compile time in ms (lower is better)},\n"
+        + "    ylabel={Compile time (lower is better)},\n"
         + "    legend style={at={(1.02,1)},anchor=north west,nodes={anchor=west},font=\\small},\n"
         + _AXIS_BASE
+        + "    ymode=log, log basis y=10,\n"
+        + "    ymin=1, ymax=6000,\n"
+        + "    ytick={10,50,100,500,1000,5000},\n"
+        + "    yticklabels={10ms,50ms,100ms,500ms,1s,5s},\n"
+        + "    log origin=infty,\n"
         + "]\n"
         + body
         + "\n"
@@ -592,8 +596,7 @@ def gen_total_time_table_tex(data: dict, plots_dir: Path) -> Path:
 
     col_spec = "l" + "r" * len(builds)
     header = " & ".join(
-        ["\\textbf{Specification}"]
-        + [f"\\textbf{{{BUILD_LABELS.get(b, b)}}} (ms)" for b in builds]
+        ["\\textbf{Specification}"] + [f"\\textbf{{{b}}} (ms)" for b in builds]
     )
 
     rows = []
@@ -746,9 +749,10 @@ def gen_phase_breakdown_combined_tex(data: dict, meta: dict, plots_dir: Path) ->
         + f"    xmin=0, xmax={xmax:.1f},\n"
         + f"    xtick={{{xtick}}},\n"
         + f"    xticklabels={{{xticklabels}}},\n"
+        + "    xticklabel style={yshift=-24pt},\n"
         + f"    extra x ticks={{{extra_ticks}}},\n"
         + f"    extra x tick labels={{{extra_labels}}},\n"
-        + "    extra x tick style={tick label style={font=\\tiny,rotate=45,anchor=north east}},\n"
+        + "    extra x tick style={tick label style={font=\\tiny,rotate=30,anchor=north east,yshift=24pt}},\n"
         + "    ymin=0, ymax=1,\n"
         + "    xlabel={Specification},\n"
         + "    ylabel={Fraction of compile time},\n"
