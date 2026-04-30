@@ -491,22 +491,13 @@ def gen_preamble_tex(meta: dict, plots_dir: Path) -> Path:
     runs_n = meta.get("runs", "?")
     warmup_n = meta.get("warmup", "?")
 
-    ignored = ", ".join(f"\\textit{{{p}}}" for p in IGNORED_PASSES if "VDT" not in p)
-    ignored_vdt = "\\textit{VDT}"
-
     tex = (
         _arnie_header()
-        + f"All benchmarks were executed on {MACHINE}.\n"
-        f"\\texttt{{openVADL}} (commit \\texttt{{{open_commit}}}) was evaluated in two\n"
-        f"configurations: a JVM distribution running on GraalVM, and an ahead-of-time\n"
-        f"compiled GraalVM Native Image. The \\texttt{{Original VADL}} compiler\n"
-        f"(commit \\texttt{{{orig_commit}}}) serves as a baseline and is only run on\n"
-        f"specifications that exist in its (older) input language.\n"
-        f"Each specification was measured over ${warmup_n}$~warmup runs followed by\n"
-        f"${runs_n}$~timed runs using the compiler-internal pass-timing facilities\n"
-        f"(\\texttt{{--timings-csv}} for openVADL, \\texttt{{--pass-stats-csv}} for\n"
-        f"Original VADL), which record per-pass wall-clock time.\n"
-        f"Infrastructure passes ({ignored_vdt}, {ignored}) were excluded from all aggregates.\n"
+        + f"All benchmarks were recorded on an {MACHINE}.\n"
+        + f"OpenVADL was checked out at git commit \\texttt{{{open_commit}}} "
+        + f"and Original VADL at \\texttt{{{orig_commit}}}.\n"
+        + f"Each specification was measured over ${runs_n}$~timed runs "
+        + f"after ${warmup_n}$~warmup runs.\n"
     )
     out = plots_dir / "preamble.tex"
     out.write_text(tex)
@@ -576,7 +567,7 @@ def gen_total_time_tex(data: dict, meta: dict, plots_dir: Path) -> Path:
         + f"    xtick={{{sym}}},\n"
         + "    enlarge x limits=0.2,\n"
         + "    xlabel={Specification},\n"
-        + "    ylabel={Compile time (lower is better)},\n"
+        + "    ylabel={Compile time},\n"
         + "    legend style={at={(1.02,1)},anchor=north west,nodes={anchor=west},font=\\small},\n"
         + _AXIS_BASE
         + "    ymode=log, log basis y=10,\n"
@@ -625,7 +616,9 @@ def gen_total_time_table_tex(data: dict, plots_dir: Path) -> Path:
         _arnie_header()
         + "\\begin{table}[ht]\n"
         + "\\centering\n"
-        + "\\begin{tabular}{" + col_spec + "}\n"
+        + "\\begin{tabular}{"
+        + col_spec
+        + "}\n"
         "\\toprule\n"
         f"    {header} \\\\\n"
         "\\midrule\n" + "\n".join(rows) + "\n"
@@ -685,7 +678,7 @@ def gen_phase_breakdown_tex(data: dict, meta: dict, plots_dir: Path) -> list[Pat
             + "\\begin{figure}[ht]\n"
             + "\\centering\n"
             + "\\resizebox{\\linewidth}{!}{%\n"
-        + "\\begin{tikzpicture}\n"
+            + "\\begin{tikzpicture}\n"
             + "\\begin{axis}[\n"
             + "    ybar stacked,\n"
             + "    bar width=16pt,\n"
@@ -703,7 +696,7 @@ def gen_phase_breakdown_tex(data: dict, meta: dict, plots_dir: Path) -> list[Pat
             + "\n"
             + "\\end{axis}\n"
             + "\\end{tikzpicture}%\n"
-        + "}\n"
+            + "}\n"
             + f"\\caption{{Phase breakdown for the \\texttt{{{build}}} build.}}\n"
             + f"\\label{{fig:phase_breakdown_{build}}}\n"
             + "\\end{figure}\n"
@@ -824,13 +817,15 @@ def gen_spec_stats_table_tex(
         _arnie_header()
         + "\\begin{table}[ht]\n"
         + "\\centering\n"
-        + "\\begin{tabular}{" + col_spec + "}\n"
+        + "\\begin{tabular}{"
+        + col_spec
+        + "}\n"
         "\\hline\n"
         f"    {header} \\\\\n"
         "\\hline\n" + "\n".join(rows) + "\n"
         "\\hline\n"
         "\\end{tabular}\n"
-        "\\caption{Static metrics for each benchmarked specification.}\n"
+        "\\caption{Metrics for each benchmarked specification.}\n"
         "\\label{tab:spec_stats}\n"
         "\\end{table}\n"
     )
