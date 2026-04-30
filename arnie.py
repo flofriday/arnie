@@ -566,6 +566,7 @@ def gen_total_time_tex(data: dict, meta: dict, plots_dir: Path) -> Path:
         _arnie_header()
         + "\\begin{figure}[ht]\n"
         + "\\centering\n"
+        + "\\resizebox{\\linewidth}{!}{%\n"
         + "\\begin{tikzpicture}\n"
         + "\\begin{axis}[\n"
         + "    ybar,\n"
@@ -587,7 +588,8 @@ def gen_total_time_tex(data: dict, meta: dict, plots_dir: Path) -> Path:
         + body
         + "\n"
         + "\\end{axis}\n"
-        + "\\end{tikzpicture}\n"
+        + "\\end{tikzpicture}%\n"
+        + "}\n"
         + "\\caption{Total compile time per specification (lower is better).}\n"
         + "\\label{fig:total_time}\n"
         + "\\end{figure}\n"
@@ -682,7 +684,8 @@ def gen_phase_breakdown_tex(data: dict, meta: dict, plots_dir: Path) -> list[Pat
             _arnie_header()
             + "\\begin{figure}[ht]\n"
             + "\\centering\n"
-            + "\\begin{tikzpicture}\n"
+            + "\\resizebox{\\linewidth}{!}{%\n"
+        + "\\begin{tikzpicture}\n"
             + "\\begin{axis}[\n"
             + "    ybar stacked,\n"
             + "    bar width=16pt,\n"
@@ -699,7 +702,8 @@ def gen_phase_breakdown_tex(data: dict, meta: dict, plots_dir: Path) -> list[Pat
             + body
             + "\n"
             + "\\end{axis}\n"
-            + "\\end{tikzpicture}\n"
+            + "\\end{tikzpicture}%\n"
+        + "}\n"
             + f"\\caption{{Phase breakdown for the \\texttt{{{build}}} build.}}\n"
             + f"\\label{{fig:phase_breakdown_{build}}}\n"
             + "\\end{figure}\n"
@@ -756,6 +760,7 @@ def gen_phase_breakdown_combined_tex(data: dict, meta: dict, plots_dir: Path) ->
         _arnie_header()
         + "\\begin{figure}[ht]\n"
         + "\\centering\n"
+        + "\\resizebox{\\linewidth}{!}{%\n"
         + "\\begin{tikzpicture}\n"
         + "\\begin{axis}[\n"
         + "    ybar stacked,\n"
@@ -777,7 +782,8 @@ def gen_phase_breakdown_combined_tex(data: dict, meta: dict, plots_dir: Path) ->
         + body
         + "\n"
         + "\\end{axis}\n"
-        + "\\end{tikzpicture}\n"
+        + "\\end{tikzpicture}%\n"
+        + "}\n"
         + "\\caption{Phase breakdown across all specifications and builds.}\n"
         + "\\label{fig:phase_breakdown}\n"
         + "\\end{figure}\n"
