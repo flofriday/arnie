@@ -564,6 +564,8 @@ def gen_total_time_tex(data: dict, meta: dict, plots_dir: Path) -> Path:
     body = "\n".join(addplots)
     tex = (
         _arnie_header()
+        + "\\begin{figure}[ht]\n"
+        + "\\centering\n"
         + "\\begin{tikzpicture}\n"
         + "\\begin{axis}[\n"
         + "    ybar,\n"
@@ -586,6 +588,9 @@ def gen_total_time_tex(data: dict, meta: dict, plots_dir: Path) -> Path:
         + "\n"
         + "\\end{axis}\n"
         + "\\end{tikzpicture}\n"
+        + "\\caption{Total compile time per specification (lower is better).}\n"
+        + "\\label{fig:total_time}\n"
+        + "\\end{figure}\n"
     )
     out = plots_dir / "total_time.tex"
     out.write_text(tex)
@@ -616,12 +621,17 @@ def gen_total_time_table_tex(data: dict, plots_dir: Path) -> Path:
 
     tex = (
         _arnie_header()
+        + "\\begin{table}[ht]\n"
+        + "\\centering\n"
         + "\\begin{tabular}{" + col_spec + "}\n"
         "\\toprule\n"
         f"    {header} \\\\\n"
         "\\midrule\n" + "\n".join(rows) + "\n"
         "\\bottomrule\n"
         "\\end{tabular}\n"
+        "\\caption{Total compile time per specification and build (mean $\\pm$ stddev, in milliseconds).}\n"
+        "\\label{tab:total_time}\n"
+        "\\end{table}\n"
     )
     out = plots_dir / "total_time_table.tex"
     out.write_text(tex)
@@ -670,6 +680,8 @@ def gen_phase_breakdown_tex(data: dict, meta: dict, plots_dir: Path) -> list[Pat
         body = _stacked_addplots(phases, build_data, specs, first=True)
         tex = (
             _arnie_header()
+            + "\\begin{figure}[ht]\n"
+            + "\\centering\n"
             + "\\begin{tikzpicture}\n"
             + "\\begin{axis}[\n"
             + "    ybar stacked,\n"
@@ -688,6 +700,9 @@ def gen_phase_breakdown_tex(data: dict, meta: dict, plots_dir: Path) -> list[Pat
             + "\n"
             + "\\end{axis}\n"
             + "\\end{tikzpicture}\n"
+            + f"\\caption{{Phase breakdown for the \\texttt{{{build}}} build.}}\n"
+            + f"\\label{{fig:phase_breakdown_{build}}}\n"
+            + "\\end{figure}\n"
         )
         out = plots_dir / f"phase_breakdown_{build}.tex"
         out.write_text(tex)
@@ -739,6 +754,8 @@ def gen_phase_breakdown_combined_tex(data: dict, meta: dict, plots_dir: Path) ->
     body = "\n".join(addplots)
     tex = (
         _arnie_header()
+        + "\\begin{figure}[ht]\n"
+        + "\\centering\n"
         + "\\begin{tikzpicture}\n"
         + "\\begin{axis}[\n"
         + "    ybar stacked,\n"
@@ -761,6 +778,9 @@ def gen_phase_breakdown_combined_tex(data: dict, meta: dict, plots_dir: Path) ->
         + "\n"
         + "\\end{axis}\n"
         + "\\end{tikzpicture}\n"
+        + "\\caption{Phase breakdown across all specifications and builds.}\n"
+        + "\\label{fig:phase_breakdown}\n"
+        + "\\end{figure}\n"
     )
     out = plots_dir / "phase_breakdown.tex"
     out.write_text(tex)
@@ -796,24 +816,21 @@ def gen_spec_stats_table_tex(
 
     tex = (
         _arnie_header()
+        + "\\begin{table}[ht]\n"
+        + "\\centering\n"
         + "\\begin{tabular}{" + col_spec + "}\n"
         "\\hline\n"
         f"    {header} \\\\\n"
         "\\hline\n" + "\n".join(rows) + "\n"
         "\\hline\n"
         "\\end{tabular}\n"
+        "\\caption{Static metrics for each benchmarked specification.}\n"
+        "\\label{tab:spec_stats}\n"
+        "\\end{table}\n"
     )
     out = plots_dir / "spec_stats.tex"
     out.write_text(tex)
     return out
-
-
-def _table_block(table: Path | None) -> str:
-    if not table:
-        return ""
-    return (
-        f"\\begin{{table}}[H]\n\\centering\n\\input{{{table.name}}}\n\\end{{table}}\n"
-    )
 
 
 def gen_plots_tex(
@@ -823,20 +840,18 @@ def gen_plots_tex(
     table: Path | None = None,
     appendix_tables: list[Path] | None = None,
 ) -> Path:
-    figures = "\n".join(
-        f"\\begin{{figure}}[H]\n\\centering\n\\input{{{p.name}}}\n\\end{{figure}}"
-        for p in snippet_paths
-    )
+    figures = "\n".join(f"\\input{{{p.name}}}" for p in snippet_paths)
+    table_input = f"\\input{{{table.name}}}\n" if table else ""
     appendix_block = ""
     if appendix_tables:
-        appendix_body = "\n".join(_table_block(t) for t in appendix_tables)
+        appendix_body = "\n".join(f"\\input{{{t.name}}}" for t in appendix_tables)
         appendix_block = "\n\\appendix\n\\section{Raw Data}\n" + appendix_body
     tex = (
         _arnie_header()
         + _PLOTS_TEX
         + "\\begin{document}\n"
         + f"\\input{{{preamble.name}}}\n"
-        + _table_block(table)
+        + table_input
         + "\n"
         + figures
         + appendix_block
