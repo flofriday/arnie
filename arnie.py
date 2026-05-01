@@ -594,7 +594,7 @@ def gen_total_time_table_tex(data: dict, plots_dir: Path) -> Path:
     builds = _builds_ordered(data)
     specs = _specs_ordered(next(iter(data.values())))
 
-    col_spec = "l" + "r" * len(builds)
+    col_spec = "|l|" + "r|" * len(builds)
     header = " & ".join(
         ["\\textbf{Specification}"] + [f"\\textbf{{{b}}} (ms)" for b in builds]
     )
@@ -619,10 +619,10 @@ def gen_total_time_table_tex(data: dict, plots_dir: Path) -> Path:
         + "\\begin{tabular}{"
         + col_spec
         + "}\n"
-        "\\toprule\n"
+        "\\hline\n"
         f"    {header} \\\\\n"
-        "\\midrule\n" + "\n".join(rows) + "\n"
-        "\\bottomrule\n"
+        "\\hline\n" + "\n".join(rows) + "\n"
+        "\\hline\n"
         "\\end{tabular}\n"
         "\\caption{Total compile time per specification and build (mean $\\pm$ stddev, in milliseconds).}\n"
         "\\label{tab:total_time}\n"
@@ -786,32 +786,19 @@ def gen_phase_breakdown_combined_tex(data: dict, meta: dict, plots_dir: Path) ->
     return out
 
 
-_STAT_LABELS: dict[str, str] = {
-    "files": "Files",
-    "lines_of_code": "Lines of Code",
-    "function_definitions": "Function Definitions",
-    "format_definitions": "Format Definitions",
-    "instruction_definitions": "Instruction Definitions",
-    "total_definitions": "Total Definitions",
-    "total_statements": "Statements",
-    "total_expressions": "Expressions",
-}
-
-
 def gen_spec_stats_table_tex(
     spec_stats: dict[str, dict[str, int]], plots_dir: Path
 ) -> Path:
     specs = _specs_ordered(spec_stats)
-    all_stats = list(_STAT_LABELS.keys())
 
     col_spec = "|l" + "|r" * len(specs) + "|"
     header = " & ".join(["\\textbf{Metric}"] + [f"\\textbf{{{s}}}" for s in specs])
 
+    all_stats = list(next(iter(spec_stats.values())).keys())
     rows = []
     for stat in all_stats:
-        label = _STAT_LABELS[stat]
         vals = [str(spec_stats[s].get(stat, "---")) for s in specs]
-        rows.append(f"    {label} & {' & '.join(vals)} \\\\")
+        rows.append(f"    {stat} & {' & '.join(vals)} \\\\")
 
     tex = (
         _arnie_header()
@@ -830,6 +817,34 @@ def gen_spec_stats_table_tex(
         "\\end{table}\n"
     )
     out = plots_dir / "spec_stats.tex"
+    out.write_text(tex)
+    return out
+
+
+def gen_pass_rename_table_tex(plots_dir: Path) -> Path:
+    rename = PASS_RENAME["original"]
+    rows = []
+    for orig, canonical in rename.items():
+        if canonical == "hidden":
+            continue
+        rows.append(f"    {orig} & {canonical} \\\\")
+
+    header = "\\textbf{Original Pass Name} & \\textbf{OpenVADL Phase}"
+    tex = (
+        _arnie_header()
+        + "\\begin{table}[ht]\n"
+        + "\\centering\n"
+        + "\\begin{tabular}{|l|l|}\n"
+        "\\hline\n"
+        f"    {header} \\\\\n"
+        "\\hline\n" + "\n".join(rows) + "\n"
+        "\\hline\n"
+        "\\end{tabular}\n"
+        + "\\caption{Mapping of Original VADL pass names to canonical OpenVADL phase names.}\n"
+        + "\\label{tab:pass_rename}\n"
+        + "\\end{table}\n"
+    )
+    out = plots_dir / "pass_rename.tex"
     out.write_text(tex)
     return out
 
@@ -937,7 +952,16 @@ def cmd_plot(args: argparse.Namespace) -> None:
     total_time_table = gen_total_time_table_tex(data, plots_dir)
     print(f"  Generated: {total_time_table.name}")
 
-    plots_tex = gen_plots_tex(preamble, snippets, plots_dir, table, [total_time_table])
+    appendix_tables = [total_time_table]
+    original_family_builds = [
+        b for b in data if BUILD_CONFIGS.get(b, {}).get("family") == "original"
+    ]
+    if original_family_builds:
+        pass_rename_table = gen_pass_rename_table_tex(plots_dir)
+        print(f"  Generated: {pass_rename_table.name}")
+        appendix_tables.append(pass_rename_table)
+
+    plots_tex = gen_plots_tex(preamble, snippets, plots_dir, table, appendix_tables)
     print(f"\n  Compiling {plots_tex.name} ...")
     pdf = compile_tex(plots_tex)
     print(f"  Written:   {pdf}")
