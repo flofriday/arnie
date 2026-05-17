@@ -941,7 +941,7 @@ def gen_spec_stats_table_tex(
         "\\hline\n"
         "\\end{tabular}\n"
         "}\n"
-        "\\caption{Metrics for each benchmarked specification.}\n"
+        "\\caption{Statistics for each benchmarked specification.}\n"
         "\\label{tab:spec_stats}\n"
         "\\end{table}\n"
     )
