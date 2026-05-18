@@ -648,7 +648,7 @@ def gen_total_time_tex(data: dict, meta: dict, plots_dir: Path) -> Path:
         + "\\end{axis}\n"
         + "\\end{tikzpicture}%\n"
         + "}\n"
-        + "\\caption{Total compile time per specification (lower is better).}\n"
+        + "\\caption{Compile time per specification (lower is better).}\n"
         + "\\label{fig:total_time}\n"
         + "\\end{figure}\n"
     )
@@ -691,7 +691,7 @@ def gen_total_time_table_tex(data: dict, plots_dir: Path) -> Path:
         "\\hline\n" + "\n".join(rows) + "\n"
         "\\hline\n"
         "\\end{tabular}\n"
-        "\\caption{Total compile time per specification and build (mean $\\pm$ stddev, in milliseconds).}\n"
+        "\\caption{Compile time per specification and build (mean $\\pm$ stddev, in milliseconds, lower is better).}\n"
         "\\label{tab:total_time}\n"
         "\\end{table}\n"
     )
@@ -764,7 +764,7 @@ def gen_phase_breakdown_tex(data: dict, meta: dict, plots_dir: Path) -> list[Pat
             + "\\end{axis}\n"
             + "\\end{tikzpicture}%\n"
             + "}\n"
-            + f"\\caption{{Phase breakdown for the \\texttt{{{build}}} build.}}\n"
+            + f"\\caption{{Pass breakdown for the \\texttt{{{build}}} build.}}\n"
             + f"\\label{{fig:phase_breakdown_{build}}}\n"
             + "\\end{figure}\n"
         )
@@ -844,7 +844,7 @@ def gen_phase_breakdown_combined_tex(data: dict, meta: dict, plots_dir: Path) ->
         + "\\end{axis}\n"
         + "\\end{tikzpicture}%\n"
         + "}\n"
-        + "\\caption{Phase breakdown across all specifications and builds.}\n"
+        + "\\caption{Pass breakdown across all specifications and builds.}\n"
         + "\\label{fig:phase_breakdown}\n"
         + "\\end{figure}\n"
     )
@@ -895,7 +895,7 @@ def gen_warmup_plot_tex(data_dir: Path, meta: dict, plots_dir: Path) -> Path | N
         + "\\begin{axis}[\n"
         + "    width=12cm, height=7cm,\n"
         + "    xlabel={Run},\n"
-        + "    ylabel={Total compile time (ms)},\n"
+        + "    ylabel={Compile time (ms)},\n"
         + "    legend style={at={(1.02,1)},anchor=north west,nodes={anchor=west},font=\\small},\n"
         + _AXIS_BASE
         + "]\n"
@@ -904,7 +904,7 @@ def gen_warmup_plot_tex(data_dir: Path, meta: dict, plots_dir: Path) -> Path | N
         + "\\end{axis}\n"
         + "\\end{tikzpicture}%\n"
         + "}\n"
-        + "\\caption{Compile time per run for \\texttt{miniARMv7} including warmup (left of dashed line).}\n"
+        + "\\caption{Compile time per run for \\texttt{miniARMv7} including warmup (left of dashed line) (lower is better).}\n"
         + "\\label{fig:warmup_miniARMv7}\n"
         + "\\end{figure}\n"
     )
@@ -958,7 +958,7 @@ def gen_pass_rename_table_tex(plots_dir: Path) -> Path:
             continue
         rows.append(f"    {orig} & {canonical} \\\\")
 
-    header = "\\textbf{Original Pass Name} & \\textbf{OpenVADL Phase}"
+    header = "\\textbf{Original Pass Name} & \\textbf{OpenVADL Pass Name}"
     tex = (
         _arnie_header()
         + "\\begin{table}[ht]\n"
@@ -969,7 +969,7 @@ def gen_pass_rename_table_tex(plots_dir: Path) -> Path:
         "\\hline\n" + "\n".join(rows) + "\n"
         "\\hline\n"
         "\\end{tabular}\n"
-        + "\\caption{Mapping of Original VADL pass names to canonical OpenVADL phase names.}\n"
+        + "\\caption{Mapping of Original VADL pass names to canonical OpenVADL pass names.}\n"
         + "\\label{tab:pass_rename}\n"
         + "\\end{table}\n"
     )
