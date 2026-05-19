@@ -913,6 +913,71 @@ def gen_warmup_plot_tex(data_dir: Path, meta: dict, plots_dir: Path) -> Path | N
     return out
 
 
+def gen_definitions_vs_time_tex(
+    data: dict, spec_stats: dict[str, dict[str, int]], plots_dir: Path
+) -> Path | None:
+    builds = _builds_ordered(data)
+    specs = _specs_ordered(spec_stats)
+
+    defs = {
+        s: spec_stats[s]["Total Definitions"]
+        for s in specs
+        if "Total Definitions" in spec_stats[s]
+    }
+    if not defs:
+        return None
+
+    addplots = []
+    for i, build in enumerate(builds):
+        color, mark = _LINE_STYLES[i % len(_LINE_STYLES)]
+        coords = []
+        for spec in specs:
+            if spec not in defs:
+                continue
+            runs = data[build].get(spec, [])
+            if not runs:
+                continue
+            mean_time = statistics.mean([_allowed_total(r) for r in runs])
+            coords.append(f"({defs[spec]},{mean_time:.2f})")
+        if not coords:
+            continue
+        addplots.append(
+            f"\\addplot[only marks, color={color}, mark={mark}, mark size=3pt] "
+            f"coordinates {{{' '.join(coords)}}};\n"
+            f"\\addlegendentry{{{build}}}"
+        )
+
+    if not addplots:
+        return None
+
+    body = "\n".join(addplots)
+    tex = (
+        _arnie_header()
+        + "\\begin{figure}[ht]\n"
+        + "\\centering\n"
+        + "\\resizebox{\\linewidth}{!}{%\n"
+        + "\\begin{tikzpicture}\n"
+        + "\\begin{axis}[\n"
+        + "    width=12cm, height=7cm,\n"
+        + "    xlabel={Total Definitions},\n"
+        + "    ylabel={Total compile time (ms)},\n"
+        + "    legend style={at={(1.02,1)},anchor=north west,nodes={anchor=west},font=\\small},\n"
+        + _AXIS_BASE
+        + "]\n"
+        + body
+        + "\n"
+        + "\\end{axis}\n"
+        + "\\end{tikzpicture}%\n"
+        + "}\n"
+        + "\\caption{Total compile time vs. specification size (total definitions).}\n"
+        + "\\label{fig:definitions_vs_time}\n"
+        + "\\end{figure}\n"
+    )
+    out = plots_dir / "definitions_vs_time.tex"
+    out.write_text(tex)
+    return out
+
+
 def gen_spec_stats_table_tex(
     spec_stats: dict[str, dict[str, int]], plots_dir: Path
 ) -> Path:
@@ -946,6 +1011,73 @@ def gen_spec_stats_table_tex(
         "\\end{table}\n"
     )
     out = plots_dir / "spec_stats.tex"
+    out.write_text(tex)
+    return out
+
+
+def gen_speedup_table_tex(data: dict, plots_dir: Path) -> Path | None:
+    specs = _specs_ordered(next(iter(data.values())))
+    candidate_pairs = [
+        ("original", "graalvm"),
+        ("original", "native"),
+        ("graalvm", "native"),
+    ]
+    pairs = [(a, b) for a, b in candidate_pairs if a in data and b in data]
+    if not pairs:
+        return None
+
+    col_spec = "|l" + "|r" * len(pairs) + "|"
+    header = " & ".join(
+        ["\\textbf{Specification}"] + [f"\\textbf{{{b} vs {a}}}" for a, b in pairs]
+    )
+
+    speedups: dict[tuple[str, str], list[float]] = {p: [] for p in pairs}
+    rows = []
+    for spec in specs:
+        cells = []
+        for a, b in pairs:
+            a_runs = data[a].get(spec, [])
+            b_runs = data[b].get(spec, [])
+            if a_runs and b_runs:
+                a_mean = statistics.mean([_allowed_total(r) for r in a_runs])
+                b_mean = statistics.mean([_allowed_total(r) for r in b_runs])
+                s = a_mean / b_mean
+                speedups[(a, b)].append(s)
+                cells.append(f"{s:.2f}$\\times$")
+            else:
+                cells.append("---")
+        if all(c == "---" for c in cells):
+            continue
+        rows.append(f"    {spec} & {' & '.join(cells)} \\\\")
+
+    if not rows:
+        return None
+
+    mean_cells = [
+        f"{statistics.mean(vs):.2f}$\\times$" if vs else "---"
+        for vs in (speedups[p] for p in pairs)
+    ]
+    mean_row = f"    \\textbf{{Mean}} & {' & '.join(mean_cells)} \\\\"
+
+    tex = (
+        _arnie_header()
+        + "\\begin{table}[H]\n"
+        + "\\centering\n"
+        + "\\begin{tabular}{"
+        + col_spec
+        + "}\n"
+        "\\hline\n"
+        f"    {header} \\\\\n"
+        "\\hline\n" + "\n".join(rows) + "\n"
+        "\\hline\n"
+        f"{mean_row}\n"
+        "\\hline\n"
+        "\\end{tabular}\n"
+        + "\\caption{Speedup of one build over another (higher is better).}\n"
+        + "\\label{tab:speedup}\n"
+        + "\\end{table}\n"
+    )
+    out = plots_dir / "speedup.tex"
     out.write_text(tex)
     return out
 
@@ -1078,6 +1210,10 @@ def cmd_plot(args: argparse.Namespace) -> None:
     warmup_plot = gen_warmup_plot_tex(data_dir, meta, plots_dir)
     if warmup_plot:
         snippets.append(warmup_plot)
+    if spec_stats:
+        defs_plot = gen_definitions_vs_time_tex(data, spec_stats, plots_dir)
+        if defs_plot:
+            snippets.append(defs_plot)
     for s in snippets:
         print(f"  Generated: {s.name}")
 
@@ -1085,6 +1221,10 @@ def cmd_plot(args: argparse.Namespace) -> None:
     print(f"  Generated: {total_time_table.name}")
 
     appendix_tables = [total_time_table]
+    speedup_table = gen_speedup_table_tex(data, plots_dir)
+    if speedup_table:
+        print(f"  Generated: {speedup_table.name}")
+        appendix_tables.append(speedup_table)
     original_family_builds = [
         b for b in data if BUILD_CONFIGS.get(b, {}).get("family") == "original"
     ]
