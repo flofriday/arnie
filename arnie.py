@@ -622,7 +622,7 @@ def gen_total_time_tex(data: dict, meta: dict, plots_dir: Path) -> Path:
     body = "\n".join(addplots)
     tex = (
         _arnie_header()
-        + "\\begin{figure}[ht]\n"
+        + "\\begin{figure}[H]\n"
         + "\\centering\n"
         + "\\resizebox{\\linewidth}{!}{%\n"
         + "\\begin{tikzpicture}\n"
@@ -648,7 +648,7 @@ def gen_total_time_tex(data: dict, meta: dict, plots_dir: Path) -> Path:
         + "\\end{axis}\n"
         + "\\end{tikzpicture}%\n"
         + "}\n"
-        + "\\caption{Compile time per specification (lower is better).}\n"
+        + "\\caption{Compile time per specification (logarithmic scale, lower is better).}\n"
         + "\\label{fig:total_time}\n"
         + "\\end{figure}\n"
     )
@@ -681,7 +681,7 @@ def gen_total_time_table_tex(data: dict, plots_dir: Path) -> Path:
 
     tex = (
         _arnie_header()
-        + "\\begin{table}[ht]\n"
+        + "\\begin{table}[H]\n"
         + "\\centering\n"
         + "\\begin{tabular}{"
         + col_spec
@@ -742,7 +742,7 @@ def gen_phase_breakdown_tex(data: dict, meta: dict, plots_dir: Path) -> list[Pat
         body = _stacked_addplots(phases, build_data, specs, first=True)
         tex = (
             _arnie_header()
-            + "\\begin{figure}[ht]\n"
+            + "\\begin{figure}[H]\n"
             + "\\centering\n"
             + "\\resizebox{\\linewidth}{!}{%\n"
             + "\\begin{tikzpicture}\n"
@@ -818,7 +818,7 @@ def gen_phase_breakdown_combined_tex(data: dict, meta: dict, plots_dir: Path) ->
     body = "\n".join(addplots)
     tex = (
         _arnie_header()
-        + "\\begin{figure}[ht]\n"
+        + "\\begin{figure}[H]\n"
         + "\\centering\n"
         + "\\resizebox{\\linewidth}{!}{%\n"
         + "\\begin{tikzpicture}\n"
@@ -888,7 +888,7 @@ def gen_warmup_plot_tex(data_dir: Path, meta: dict, plots_dir: Path) -> Path | N
 
     tex = (
         _arnie_header()
-        + "\\begin{figure}[ht]\n"
+        + "\\begin{figure}[H]\n"
         + "\\centering\n"
         + "\\resizebox{\\linewidth}{!}{%\n"
         + "\\begin{tikzpicture}\n"
@@ -929,7 +929,7 @@ def gen_spec_stats_table_tex(
 
     tex = (
         _arnie_header()
-        + "\\begin{table}[ht]\n"
+        + "\\begin{table}[H]\n"
         + "\\centering\n"
         + "\\small{\n"
         + "\\begin{tabular}{"
@@ -961,7 +961,7 @@ def gen_pass_rename_table_tex(plots_dir: Path) -> Path:
     header = "\\textbf{Original Pass Name} & \\textbf{OpenVADL Pass Name}"
     tex = (
         _arnie_header()
-        + "\\begin{table}[ht]\n"
+        + "\\begin{table}[H]\n"
         + "\\centering\n"
         + "\\begin{tabular}{|l|l|}\n"
         "\\hline\n"
