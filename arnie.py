@@ -1,3 +1,4 @@
+#!/usr/bin/env -S uv run
 import argparse
 import csv
 import os
@@ -16,7 +17,7 @@ import tomli_w
 CONFIG_FILE = Path("config.toml")
 DATA_DIR = Path("data")
 
-MACHINE = "Apple M3 Max (36\\,GB)"
+MACHINE = "MacBook Pro with an Apple M3 Max (36\\,GB)"
 
 IGNORED_PASSES = [
     "VDT",
@@ -47,6 +48,15 @@ SPECS: dict[str, dict[str, str | Path]] = {
     "miniARMv7": {
         "openvadl": _HERE / "secret_specs" / "miniARMv7.vadl",
         "original": "sys/aarch32/src/miniARMv7.vadl",
+    },
+    "aarch32": {
+        "openvadl": "sys/aarch32/aarch32.vadl",
+    },
+    "aarch32-expanded": {
+        "openvadl": _HERE / "secret_specs" / "aarch32-expanded.vadl",
+    },
+    "huge": {
+        "openvadl": "sys/huge/huge.vadl",
     },
 }
 
