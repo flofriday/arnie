@@ -614,21 +614,58 @@ def gen_total_time_tex(data: dict, meta: dict, plots_dir: Path) -> Path:
             statistics.stdev(t) if len(t) > 1 else 0 for t in totals_per_spec
         ]
 
+    # Builds that actually have data for each spec, in build order.
+    present_builds = [[b for b in builds if data[b].get(spec)] for spec in specs]
+
+    # Lay the bars out consecutively (in x-axis data units) instead of pinning
+    # each group's center to an integer: bars within a group are STEP apart and
+    # the first bar of the next group is GROUP_GAP further on. This keeps the
+    # gap between groups even regardless of how many bars each group has. Each
+    # spec's tick is then placed at the actual center of its (variable-width)
+    # group, so the labels still line up under their bars.
+    STEP = 1.0  # center-to-center spacing of bars within a group
+    GROUP_GAP = 1.8  # center-to-center spacing across a group boundary
+    BAR_FRAC = 0.8  # bar width as a fraction of STEP (leaves a within-group gap)
+    EDGE_PAD = 1.2  # blank space (in units) on each side, see enlarge x limits
+
+    bar_x: dict[tuple[str, str], float] = {}
+    tick_pos: list[float] = []
+    cursor = 0.0
+    for j, spec in enumerate(specs):
+        present = present_builds[j]
+        k = max(1, len(present))
+        for idx, build in enumerate(present):
+            bar_x[(build, spec)] = cursor + idx * STEP
+        tick_pos.append(cursor + (k - 1) * STEP / 2)
+        cursor += (k - 1) * STEP + GROUP_GAP
+
+    # Rendered width = bar span + the EDGE_PAD padding added on each side.
+    total_units = (cursor - GROUP_GAP) + 2 * EDGE_PAD
+    x_unit_cm = 14.0 / total_units  # keep overall width ~14cm (old fixed width)
+    bar_width_cm = BAR_FRAC * STEP * x_unit_cm
+
     addplots = []
     for i, build in enumerate(builds):
-        coords = " ".join(
-            f"({spec},{means[build][j]:.2f}) +- (0,{errs[build][j]:.2f})"
-            for j, spec in enumerate(specs)
-            if data[build].get(spec)
-        )
+        coords = []
+        for spec in specs:
+            x = bar_x.get((build, spec))
+            if x is None:
+                continue
+            j = specs.index(spec)
+            coords.append(
+                f"({x:.3f},{means[build][j]:.2f}) +- (0,{errs[build][j]:.2f})"
+            )
+        if not coords:
+            continue
         addplots.append(
             f"\\addplot[{_pgf_style(i)}]\n"
             f"    plot[error bars/.cd, y dir=both, y explicit]\n"
-            f"    coordinates {{{coords}}};\n"
+            f"    coordinates {{{' '.join(coords)}}};\n"
             f"\\addlegendentry{{{build}}}"
         )
 
-    sym = ",".join(specs)
+    xtick = ",".join(f"{t:.3f}" for t in tick_pos)
+    xticklabels = ",".join(specs)
     body = "\n".join(addplots)
     tex = (
         _arnie_header()
@@ -638,12 +675,13 @@ def gen_total_time_tex(data: dict, meta: dict, plots_dir: Path) -> Path:
         + "\\begin{tikzpicture}\n"
         + "\\begin{axis}[\n"
         + "    ybar,\n"
-        + "    bar width=8pt,\n"
-        + "    width=14cm, height=7cm,\n"
-        + f"    symbolic x coords={{{sym}}},\n"
-        + f"    xtick={{{sym}}},\n"
+        + "    bar shift=0pt,\n"
+        + f"    bar width={bar_width_cm:.3f}cm,\n"
+        + f"    x={x_unit_cm}cm, height=8cm,\n"
+        + f"    xtick={{{xtick}}},\n"
+        + f"    xticklabels={{{xticklabels}}},\n"
         + "    xticklabel style={rotate=30, anchor=north east,font=\\small},\n"
-        + "    enlarge x limits=0.2,\n"
+        + f"    enlarge x limits={{abs={EDGE_PAD}}},\n"
         + "    xlabel={Specification},\n"
         + "    ylabel={Compile time},\n"
         + "    legend style={at={(1.02,1)},anchor=north west,nodes={anchor=west},font=\\small},\n"
