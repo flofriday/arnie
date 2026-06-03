@@ -515,13 +515,17 @@ _PLOTS_TEX = r"""\documentclass[a4paper,12pt]{article}
 \usepackage[a4paper,margin=2.5cm]{geometry}
 \usepackage{float}
 \usepackage{booktabs}
+\usepackage{rotating}
+\usepackage{siunitx}
+\sisetup{group-minimum-digits=4}  % thin-space digit grouping from 4 digits up
 \usepackage{pgfplots}
 \pgfplotsset{compat=1.18}
 \usetikzlibrary{patterns}
 \usepgfplotslibrary{groupplots}
 % Required packages when including individual snippets in a paper:
 %   \usepackage{pgfplots}, \usetikzlibrary{patterns},
-%   \usepgfplotslibrary{groupplots}
+%   \usepgfplotslibrary{groupplots}, \usepackage{rotating},
+%   \usepackage{siunitx}
 """
 
 _AXIS_BASE = (
@@ -1039,14 +1043,19 @@ def gen_spec_stats_table_tex(
     all_stats = list(next(iter(spec_stats.values())).keys())
     rows = []
     for stat in all_stats:
-        vals = [str(spec_stats[s].get(stat, "---")) for s in specs]
+        vals = []
+        for s in specs:
+            v = spec_stats[s].get(stat)
+            vals.append(f"\\num{{{v}}}" if v is not None else "---")
         rows.append(f"    {stat} & {' & '.join(vals)} \\\\")
 
+    # Rotated 90deg (sidewaystable) so the wide table uses the page's long
+    # dimension; this keeps it readable at \footnotesize instead of \tiny.
     tex = (
         _arnie_header()
-        + "\\begin{table}[H]\n"
+        + "\\begin{sidewaystable}\n"
         + "\\centering\n"
-        + "\\small{\n"
+        + "\\footnotesize\n"
         + "\\begin{tabular}{"
         + col_spec
         + "}\n"
@@ -1055,10 +1064,9 @@ def gen_spec_stats_table_tex(
         "\\hline\n" + "\n".join(rows) + "\n"
         "\\hline\n"
         "\\end{tabular}\n"
-        "}\n"
         "\\caption{Statistics for each benchmarked specification.}\n"
         "\\label{tab:spec_stats}\n"
-        "\\end{table}\n"
+        "\\end{sidewaystable}\n"
     )
     out = plots_dir / "spec_stats.tex"
     out.write_text(tex)
@@ -1120,8 +1128,8 @@ def gen_speedup_table_tex(data: dict, plots_dir: Path) -> Path | None:
         f"    {header} \\\\\n"
         "\\hline\n" + "\n".join(rows) + "\n"
         "\\hline\n"
-        f"{mean_row}\n"
-        "\\hline\n"
+        # f"{mean_row}\n"
+        # "\\hline\n"
         "\\end{tabular}\n"
         + "\\caption{Speedup of one build over another (higher is better).}\n"
         + "\\label{tab:speedup}\n"
@@ -1151,7 +1159,7 @@ def gen_pass_rename_table_tex(plots_dir: Path) -> Path:
         "\\hline\n" + "\n".join(rows) + "\n"
         "\\hline\n"
         "\\end{tabular}\n"
-        + "\\caption{Mapping of Original VADL pass names to canonical OpenVADL pass names.}\n"
+        + "\\caption{Mapping of Original VADL pass names to OpenVADL pass names.}\n"
         + "\\label{tab:pass_rename}\n"
         + "\\end{table}\n"
     )
