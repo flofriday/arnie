@@ -979,24 +979,35 @@ def gen_warmup_plot_tex(data_dir: Path, meta: dict, plots_dir: Path) -> Path | N
     return out
 
 
-def gen_definitions_vs_time_tex(
-    data: dict, spec_stats: dict[str, dict[str, int]], plots_dir: Path
-) -> Path | None:
-    builds = _builds_ordered(data)
-    specs = _specs_ordered(spec_stats)
+def _linfit(points: list[tuple[float, float]]) -> tuple[float, float] | None:
+    """Ordinary least-squares fit y = m*x + d. None if it can't be determined."""
+    n = len(points)
+    if n < 2:
+        return None
+    mean_x = sum(x for x, _ in points) / n
+    mean_y = sum(y for _, y in points) / n
+    sxx = sum((x - mean_x) ** 2 for x, _ in points)
+    if sxx == 0:  # all x equal -> no slope
+        return None
+    sxy = sum((x - mean_x) * (y - mean_y) for x, y in points)
+    m = sxy / sxx
+    d = mean_y - m * mean_x
+    return m, d
 
+
+def _definitions_vs_time_points(
+    data: dict, spec_stats: dict[str, dict[str, int]]
+) -> dict[str, list[tuple[float, float]]]:
+    """Per-build (total definitions, mean compile time) points, in build order."""
+    specs = _specs_ordered(spec_stats)
     defs = {
         s: spec_stats[s]["Total Definitions"]
         for s in specs
         if "Total Definitions" in spec_stats[s]
     }
-    if not defs:
-        return None
-
-    addplots = []
-    for i, build in enumerate(builds):
-        color, mark = _LINE_STYLES[i % len(_LINE_STYLES)]
-        coords = []
+    points: dict[str, list[tuple[float, float]]] = {}
+    for build in _builds_ordered(data):
+        pts = []
         for spec in specs:
             if spec not in defs:
                 continue
@@ -1004,19 +1015,46 @@ def gen_definitions_vs_time_tex(
             if not runs:
                 continue
             mean_time = statistics.mean([_allowed_total(r) for r in runs])
-            coords.append(f"({defs[spec]},{mean_time:.2f})")
-        if not coords:
-            continue
-        addplots.append(
-            f"\\addplot[only marks, color={color}, mark={mark}, mark size=3pt] "
-            f"coordinates {{{' '.join(coords)}}};\n"
-            f"\\addlegendentry{{{build}}}"
-        )
+            pts.append((float(defs[spec]), mean_time))
+        if pts:
+            points[build] = pts
+    return points
 
-    if not addplots:
+
+def gen_definitions_vs_time_tex(
+    data: dict, spec_stats: dict[str, dict[str, int]], plots_dir: Path
+) -> Path | None:
+    builds = _builds_ordered(data)
+    points = _definitions_vs_time_points(data, spec_stats)
+    if not points:
         return None
 
-    body = "\n".join(addplots)
+    # Lines are drawn first so the markers sit on top of them.
+    line_plots = []
+    marker_plots = []
+    for i, build in enumerate(builds):
+        pts = points.get(build)
+        if not pts:
+            continue
+        color, mark = _LINE_STYLES[i % len(_LINE_STYLES)]
+        coords = " ".join(f"({x:.0f},{y:.2f})" for x, y in pts)
+        marker_plots.append(
+            f"\\addplot[only marks, color={color}, mark={mark}, mark size=3pt] "
+            f"coordinates {{{coords}}};\n"
+            f"\\addlegendentry{{{build}}}"
+        )
+        fit = _linfit(pts)
+        if fit:
+            m, d = fit
+            x0 = min(x for x, _ in pts)
+            x1 = max(x for x, _ in pts)
+            line_plots.append(
+                f"\\addplot[color={color}, dashed, line width=1pt, forget plot] "
+                f"coordinates {{({x0:.0f},{m * x0 + d:.2f}) "
+                f"({x1:.0f},{m * x1 + d:.2f})}};"
+            )
+
+    body = "\n".join(line_plots + marker_plots)
     tex = (
         _arnie_header()
         + "\\begin{figure}[ht]\n"
@@ -1040,6 +1078,53 @@ def gen_definitions_vs_time_tex(
         + "\\end{figure}\n"
     )
     out = plots_dir / "definitions_vs_time.tex"
+    out.write_text(tex)
+    return out
+
+
+def gen_definitions_vs_time_fit_table_tex(
+    data: dict, spec_stats: dict[str, dict[str, int]], plots_dir: Path
+) -> Path | None:
+    points = _definitions_vs_time_points(data, spec_stats)
+
+    rows = []
+    for build in _builds_ordered(data):
+        fit = _linfit(points.get(build, []))
+        if not fit:
+            continue
+        m, d = fit
+        sign = "+" if d >= 0 else "-"
+        eq = f"$y = \\num{{{m:.4f}}}\\,x {sign} \\num{{{abs(d):.2f}}}$"
+        rows.append(
+            f"    {build} & \\num{{{m:.4f}}} & \\num{{{d:.2f}}} & {eq} \\\\"
+        )
+    if not rows:
+        return None
+
+    header = " & ".join(
+        [
+            "\\textbf{Build}",
+            "\\textbf{Slope $m$ (ms/def)}",
+            "\\textbf{Intercept $d$ (ms)}",
+            "\\textbf{Fit $y = mx + d$}",
+        ]
+    )
+    tex = (
+        _arnie_header()
+        + "\\begin{table}[H]\n"
+        + "\\centering\n"
+        + "\\begin{tabular}{|l|r|r|l|}\n"
+        "\\hline\n"
+        f"    {header} \\\\\n"
+        "\\hline\n" + "\n".join(rows) + "\n"
+        "\\hline\n"
+        "\\end{tabular}\n"
+        "\\caption{Least-squares linear fit of compile time vs.\\ total "
+        "definitions.}\n"
+        "\\label{tab:definitions_vs_time_fit}\n"
+        "\\end{table}\n"
+    )
+    out = plots_dir / "definitions_vs_time_fit.tex"
     out.write_text(tex)
     return out
 
@@ -1295,6 +1380,11 @@ def cmd_plot(args: argparse.Namespace) -> None:
     if speedup_table:
         print(f"  Generated: {speedup_table.name}")
         appendix_tables.append(speedup_table)
+    if spec_stats:
+        fit_table = gen_definitions_vs_time_fit_table_tex(data, spec_stats, plots_dir)
+        if fit_table:
+            print(f"  Generated: {fit_table.name}")
+            appendix_tables.append(fit_table)
     original_family_builds = [
         b for b in data if BUILD_CONFIGS.get(b, {}).get("family") == "original"
     ]
