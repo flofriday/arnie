@@ -834,42 +834,56 @@ def gen_phase_breakdown_combined_tex(data: dict, meta: dict, plots_dir: Path) ->
     specs = _specs_ordered(next(iter(data.values())))
     phases = allowed_phases(data)
 
-    n_builds = len(builds)
-    gap = n_builds + 1  # bars per group + 1 empty unit between groups
-
-    def bar_pos(si: int, bi: int) -> float:
-        return si * gap + bi + 1
-
-    centers = [
-        (bar_pos(si, 0) + bar_pos(si, n_builds - 1)) / 2 for si in range(len(specs))
-    ]
-    xmax = bar_pos(len(specs) - 1, n_builds - 1) + gap / 2
-
     # Normalized means: means[build][spec][phase] sums to 1 per (build, spec)
     norm: dict[str, dict[str, dict[str, float]]] = {
         build: _phase_means(phases, data[build], specs) for build in builds
     }
 
+    # Only place a bar for (spec, build) pairs that actually have data, and pack
+    # them with a running cursor so specs missing a build don't reserve an empty,
+    # labelled slot. STEP separates bars in a group, GROUP_GAP separates groups.
+    STEP = 1.0
+    GROUP_GAP = 1.8
+    present_builds = {spec: [b for b in builds if data[b].get(spec)] for spec in specs}
+
+    bar_x: dict[tuple[str, str], float] = {}
+    centers = []
+    cursor = 0.0
+    for spec in specs:
+        present = present_builds[spec]
+        k = max(1, len(present))
+        for idx, build in enumerate(present):
+            bar_x[(spec, build)] = cursor + idx * STEP
+        centers.append(cursor + (k - 1) * STEP / 2)
+        cursor += (k - 1) * STEP + GROUP_GAP
+    xmax = (cursor - GROUP_GAP) + STEP  # last bar plus a little margin
+
+    # Flat (spec, build) order shared by every stacked series.
+    pairs = [(spec, build) for spec in specs for build in present_builds[spec]]
+
     addplots = []
     for pi, phase in enumerate(phases):
         coords = " ".join(
-            f"({bar_pos(si, bi):.1f},{norm[build][spec][phase]:.4f})"
-            for si, spec in enumerate(specs)
-            for bi, build in enumerate(builds)
+            f"({bar_x[(spec, build)]:.2f},{norm[build][spec][phase]:.4f})"
+            for spec, build in pairs
         )
         addplots.append(
             f"\\addplot[{_pgf_style(pi)}] coordinates {{{coords}}};\n"
             f"\\addlegendentry{{{phase}}}"
         )
 
-    xtick = ",".join(f"{c:.1f}" for c in centers)
+    xtick = ",".join(f"{c:.2f}" for c in centers)
     xticklabels = ",".join(specs)
-    extra_ticks = ",".join(
-        f"{bar_pos(si, bi):.1f}" for si in range(len(specs)) for bi in range(n_builds)
-    )
-    extra_labels = ",".join(build for _ in specs for build in builds)
 
-    body = "\n".join(addplots)
+    # Build names sit on top of each bar (every stack sums to 1, so the top is
+    # at y=1); spec names are the bottom x-axis labels.
+    build_labels = "\n".join(
+        f"\\node[font=\\tiny,rotate=30,anchor=south west,inner sep=2pt] "
+        f"at (axis cs:{bar_x[(spec, build)]:.2f},1) {{{build}}};"
+        for spec, build in pairs
+    )
+
+    body = "\n".join(addplots) + "\n" + build_labels
     tex = (
         _arnie_header()
         + "\\begin{figure}[H]\n"
@@ -880,13 +894,11 @@ def gen_phase_breakdown_combined_tex(data: dict, meta: dict, plots_dir: Path) ->
         + "    ybar stacked,\n"
         + "    bar width=10pt,\n"
         + "    width=15cm, height=8cm,\n"
-        + f"    xmin=0, xmax={xmax:.1f},\n"
+        + "    clip=false,\n"
+        + f"    xmin=-1, xmax={xmax:.1f},\n"
         + f"    xtick={{{xtick}}},\n"
         + f"    xticklabels={{{xticklabels}}},\n"
-        + "    xticklabel style={yshift=-24pt},\n"
-        + f"    extra x ticks={{{extra_ticks}}},\n"
-        + f"    extra x tick labels={{{extra_labels}}},\n"
-        + "    extra x tick style={tick label style={font=\\tiny,rotate=30,anchor=north east,yshift=24pt}},\n"
+        + "    xticklabel style={rotate=20,anchor=north east,font=\\small},\n"
         + "    ymin=0, ymax=1,\n"
         + "    xlabel={Specification},\n"
         + "    ylabel={Fraction of compile time},\n"
