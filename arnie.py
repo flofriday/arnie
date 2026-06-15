@@ -58,6 +58,9 @@ SPECS: dict[str, dict[str, str | Path]] = {
     "huge": {
         "openvadl": "sys/huge/huge.vadl",
     },
+    "huge-expanded": {
+        "openvadl": _HERE / "secret_specs" / "huge-expanded.vadl",
+    },
 }
 
 # Each build defines its own family, repo, build/run commands, and where it
@@ -1095,9 +1098,7 @@ def gen_definitions_vs_time_fit_table_tex(
         m, d = fit
         sign = "+" if d >= 0 else "-"
         eq = f"$y = \\num{{{m:.4f}}}\\,x {sign} \\num{{{abs(d):.2f}}}$"
-        rows.append(
-            f"    {build} & \\num{{{m:.4f}}} & \\num{{{d:.2f}}} & {eq} \\\\"
-        )
+        rows.append(f"    {build} & \\num{{{m:.4f}}} & \\num{{{d:.2f}}} & {eq} \\\\")
     if not rows:
         return None
 
