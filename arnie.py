@@ -34,6 +34,7 @@ _HERE = Path(__file__).parent
 SPECS: dict[str, dict[str, str | Path]] = {
     "rv32i": {
         "openvadl": "sys/risc-v/rv32i.vadl",
+        "original": "sys/risc-v/newsrc/rv32i.vadl",
     },
     "ppc64": {
         "openvadl": "sys/ppc64/ppc64.vadl",
@@ -42,8 +43,9 @@ SPECS: dict[str, dict[str, str | Path]] = {
         "openvadl": "sys/hexagon/hexagon.vadl",
         "original": "sys/hexagon/src/hexagon.vadl",
     },
-    "sve": {
-        "openvadl": "sys/aarch64/sve.vadl",
+    "aarch64": {
+        "original": "sys/aarch64/src/aarch64.vadl",
+        "openvadl": "sys/aarch64/aarch64.vadl",
     },
     "miniARMv7": {
         "openvadl": _HERE / "secret_specs" / "miniARMv7.vadl",
