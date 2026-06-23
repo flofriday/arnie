@@ -584,6 +584,7 @@ _PLOTS_TEX = r"""\documentclass[a4paper,12pt]{article}
 %   \usepackage{pgfplots}, \usetikzlibrary{patterns},
 %   \usepgfplotslibrary{groupplots}, \usepackage{rotating},
 %   \usepackage{siunitx}
+\usepackage{makecell}
 """
 
 _AXIS_BASE = (
@@ -803,7 +804,7 @@ def gen_total_time_table_tex(data: dict, plots_dir: Path) -> Path:
         "\\hline\n" + "\n".join(rows) + "\n"
         "\\hline\n"
         "\\end{tabular}\n"
-        "\\caption{Compile time per specification and build (mean $\\pm$ stddev, in milliseconds, lower is better).}\n"
+        "\\caption{Compile time per specification and configuration (mean $\\pm$ stddev, in milliseconds, lower is better).}\n"
         "\\label{tab:total_time}\n"
         "\\end{table}\n"
     )
@@ -876,7 +877,7 @@ def gen_phase_breakdown_tex(data: dict, meta: dict, plots_dir: Path) -> list[Pat
             + "\\end{axis}\n"
             + "\\end{tikzpicture}%\n"
             + "}\n"
-            + f"\\caption{{Pass breakdown for the \\texttt{{{build}}} build.}}\n"
+            + f"\\caption{{Pass breakdown for the \\texttt{{{build}}} configuration.}}\n"
             + f"\\label{{fig:phase_breakdown_{build}}}\n"
             + "\\end{figure}\n"
         )
@@ -968,7 +969,7 @@ def gen_phase_breakdown_combined_tex(data: dict, meta: dict, plots_dir: Path) ->
         + "\\end{axis}\n"
         + "\\end{tikzpicture}%\n"
         + "}\n"
-        + "\\caption{Pass breakdown across all specifications and builds.}\n"
+        + "\\caption{Pass breakdown across all specifications and configurations.}\n"
         + "\\label{fig:phase_breakdown}\n"
         + "\\end{figure}\n"
     )
@@ -979,7 +980,7 @@ def gen_phase_breakdown_combined_tex(data: dict, meta: dict, plots_dir: Path) ->
 
 def gen_warmup_plot_tex(data_dir: Path, meta: dict, plots_dir: Path) -> Path | None:
     spec = "miniARMv7"
-    builds = _builds_ordered({b: None for b in meta.get("builds", [])})
+    builds = _builds_ordered({b: None for b in meta.get("configurations", [])})
     warmup_n = meta.get("warmup", 0)
 
     series: dict[str, list[float]] = {}
@@ -1057,7 +1058,7 @@ def _linfit(points: list[tuple[float, float]]) -> tuple[float, float] | None:
 def _definitions_vs_time_points(
     data: dict, spec_stats: dict[str, dict[str, int]]
 ) -> dict[str, list[tuple[float, float]]]:
-    """Per-build (total definitions, mean compile time) points, in build order."""
+    """Per configuration (total definitions, mean compile time) points, in configuration order."""
     specs = _specs_ordered(spec_stats)
     defs = {
         s: spec_stats[s]["Total Definitions"]
@@ -1132,7 +1133,7 @@ def gen_definitions_vs_time_tex(
         + "\\end{axis}\n"
         + "\\end{tikzpicture}%\n"
         + "}\n"
-        + "\\caption{Total compile time vs. specification size (total definitions).}\n"
+        + "\\caption{Compile time as a function of specification size (total definitions).}\n"
         + "\\label{fig:definitions_vs_time}\n"
         + "\\end{figure}\n"
     )
@@ -1153,14 +1154,14 @@ def gen_definitions_vs_time_fit_table_tex(
             continue
         m, d = fit
         sign = "+" if d >= 0 else "-"
-        eq = f"$y = \\num{{{m:.4f}}}\\,x {sign} \\num{{{abs(d):.2f}}}$"
-        rows.append(f"    {build} & \\num{{{m:.4f}}} & \\num{{{d:.2f}}} & {eq} \\\\")
+        eq = f"$y = {m:.4f}\\,x {sign} {abs(d):.2f}$"
+        rows.append(f"    {build} & {m:.4f} & {d:.2f} & {eq} \\\\")
     if not rows:
         return None
 
     header = " & ".join(
         [
-            "\\textbf{Build}",
+            "\\textbf{Configuration}",
             "\\textbf{Slope $m$ (ms/def)}",
             "\\textbf{Intercept $d$ (ms)}",
             "\\textbf{Fit $y = mx + d$}",
@@ -1191,8 +1192,13 @@ def gen_spec_stats_table_tex(
 ) -> Path:
     specs = _specs_ordered(spec_stats)
 
+    def header_cell(s: str) -> str:
+        parts = s.split("-")
+        text = "-\\\\\n".join([f"\\textbf{{{p}}}" for p in parts])
+        return f"\\makecell[r]{{{text}}}"
+
     col_spec = "|l" + "|r" * len(specs) + "|"
-    header = " & ".join(["\\textbf{Metric}"] + [f"\\textbf{{{s}}}" for s in specs])
+    header = " & ".join(["\\textbf{Metric}"] + [header_cell(s) for s in specs])
 
     all_stats = list(next(iter(spec_stats.values())).keys())
     rows = []
@@ -1285,7 +1291,7 @@ def gen_speedup_table_tex(data: dict, plots_dir: Path) -> Path | None:
         # f"{mean_row}\n"
         # "\\hline\n"
         "\\end{tabular}\n"
-        + "\\caption{Speedup of one build over another (higher is better).}\n"
+        + "\\caption{Speedup of one configuration over another (higher is better).}\n"
         + "\\label{tab:speedup}\n"
         + "\\end{table}\n"
     )
