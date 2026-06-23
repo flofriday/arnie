@@ -555,12 +555,17 @@ PGF_STYLES = [
 
 # pgfplots color + mark per line series index
 _LINE_STYLES = [
-    ("blue", "*"),
-    ("red", "square*"),
-    ("green!60!black", "triangle*"),
-    ("orange!80!black", "diamond*"),
-    ("purple", "pentagon*"),
-    ("teal", "o"),
+    ("blue!70!black", "*"),
+    ("red!75!black", "square*"),
+    ("green!45!black", "triangle*"),
+    ("orange!85!black", "diamond*"),
+    ("purple!75!black", "pentagon*"),
+    ("teal!70!black", "o"),
+    ("brown!75!black", "star"),
+    ("cyan!55!black", "square"),
+    ("yellow!45!black", "triangle"),
+    ("magenta!70!black", "diamond"),
+    ("olive!70!black", "pentagon"),
 ]
 
 # Preamble for plots.tex — the single compiled document
@@ -995,7 +1000,8 @@ def gen_warmup_plot_tex(data_dir: Path, meta: dict, plots_dir: Path) -> Path | N
         color, mark = _LINE_STYLES[i % len(_LINE_STYLES)]
         coords = " ".join(f"({j + 1},{t:.2f})" for j, t in enumerate(totals))
         addplots.append(
-            f"\\addplot[color={color}, mark={mark}] coordinates {{{coords}}};\n"
+            f"\\addplot[color={color}, mark={mark}, line width=1pt] "
+            f"coordinates {{{coords}}};\n"
             f"\\addlegendentry{{{build}}}"
         )
 
