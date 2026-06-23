@@ -67,7 +67,7 @@ SPECS: dict[str, dict[str, str | Path]] = {
 
 # Each build defines its own family, repo, build/run commands, and where it
 # writes its timings/stats CSVs (relative to the repo cwd).
-# `<SPEC>` in run_cmd is replaced with the resolved spec path at run time.
+# `<SPEC>` in run_cmd/stats_cmd is replaced with the resolved spec path at run time.
 
 BUILD_CONFIGS: dict[str, dict] = {
     "original": {
@@ -91,6 +91,13 @@ BUILD_CONFIGS: dict[str, dict] = {
             "skip=all",
             "<SPEC>",
             "--timings-csv",
+        ],
+        "stats_cmd": [
+            "./vadl-cli/build/install/openvadl/bin/openvadl",
+            "check",
+            "--decoder",
+            "skip=all",
+            "<SPEC>",
             "--spec-stats-csv",
         ],
         "timings_file": "output/timings.csv",
@@ -108,6 +115,13 @@ BUILD_CONFIGS: dict[str, dict] = {
             "skip=all",
             "<SPEC>",
             "--timings-csv",
+        ],
+        "stats_cmd": [
+            "./vadl-cli/build/native/nativeCompile/openvadl",
+            "check",
+            "--decoder",
+            "skip=all",
+            "<SPEC>",
             "--spec-stats-csv",
         ],
         "timings_file": "output/timings.csv",
@@ -318,6 +332,7 @@ def cmd_bench(args: argparse.Namespace) -> None:
         family = cfg["family"]
         repo = repos[cfg["repo_key"]]
         run_cmd_template = cfg["run_cmd"]
+        stats_cmd_template = cfg.get("stats_cmd")
         timings_src = repo / cfg["timings_file"]
         stats_src = repo / cfg["stats_file"] if cfg["stats_file"] else None
 
@@ -331,6 +346,39 @@ def cmd_bench(args: argparse.Namespace) -> None:
             out_dir.mkdir(parents=True)
 
             run_cmd = [spec_path if a == "<SPEC>" else a for a in run_cmd_template]
+            stats_cmd = (
+                [spec_path if a == "<SPEC>" else a for a in stats_cmd_template]
+                if stats_cmd_template
+                else None
+            )
+
+            if stats_cmd and stats_src:
+                print(f"  [{build}/{spec_name}] spec-stats warmup")
+
+                if stats_src.exists():
+                    stats_src.unlink()
+                result = subprocess.run(
+                    stats_cmd,
+                    cwd=repo,
+                    capture_output=True,
+                )
+                if result.returncode != 0:
+                    stdout = result.stdout.decode(errors="replace")
+                    stderr = result.stderr.decode(errors="replace")
+                    output = "\n".join(filter(None, [stdout, stderr]))
+                    print(
+                        f"Error: spec-stats failed on {spec_path}:\n{output}",
+                        file=sys.stderr,
+                    )
+                    sys.exit(1)
+
+                if not stats_src.exists():
+                    print(
+                        f"Error: spec-stats did not produce {stats_src}.",
+                        file=sys.stderr,
+                    )
+                    sys.exit(1)
+                shutil.copy(stats_src, out_dir / "spec-stats.csv")
 
             total = args.warmup + args.runs
             for i in range(1, total + 1):
@@ -362,7 +410,7 @@ def cmd_bench(args: argparse.Namespace) -> None:
                 )
                 shutil.move(timings_src, dst)
 
-                if i == 1 and stats_src and stats_src.exists():
+                if i == 1 and not stats_cmd and stats_src and stats_src.exists():
                     shutil.copy(stats_src, out_dir / "spec-stats.csv")
 
     metadata = {
