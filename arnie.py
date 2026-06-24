@@ -855,7 +855,7 @@ def gen_phase_breakdown_tex(data: dict, meta: dict, plots_dir: Path) -> list[Pat
         body = _stacked_addplots(phases, build_data, specs, first=True)
         tex = (
             _arnie_header()
-            + "\\begin{figure}[H]\n"
+            + "\\begin{figure}[htbp]\n"
             + "\\centering\n"
             + "\\resizebox{\\linewidth}{!}{%\n"
             + "\\begin{tikzpicture}\n"
@@ -945,7 +945,7 @@ def gen_phase_breakdown_combined_tex(data: dict, meta: dict, plots_dir: Path) ->
     body = "\n".join(addplots) + "\n" + build_labels
     tex = (
         _arnie_header()
-        + "\\begin{figure}[H]\n"
+        + "\\begin{figure}[htbp]\n"
         + "\\centering\n"
         + "\\resizebox{\\linewidth}{!}{%\n"
         + "\\begin{tikzpicture}\n"
@@ -1014,7 +1014,7 @@ def gen_warmup_plot_tex(data_dir: Path, meta: dict, plots_dir: Path) -> Path | N
 
     tex = (
         _arnie_header()
-        + "\\begin{figure}[H]\n"
+        + "\\begin{figure}[htbp]\n"
         + "\\centering\n"
         + "\\resizebox{\\linewidth}{!}{%\n"
         + "\\begin{tikzpicture}\n"
@@ -1169,7 +1169,7 @@ def gen_definitions_vs_time_fit_table_tex(
     )
     tex = (
         _arnie_header()
-        + "\\begin{table}[H]\n"
+        + "\\begin{table}[htbp]\n"
         + "\\centering\n"
         + "\\begin{tabular}{|l|r|r|l|}\n"
         "\\hline\n"
@@ -1279,7 +1279,7 @@ def gen_speedup_table_tex(data: dict, plots_dir: Path) -> Path | None:
 
     tex = (
         _arnie_header()
-        + "\\begin{table}[H]\n"
+        + "\\begin{table}[htbp]\n"
         + "\\centering\n"
         + "\\begin{tabular}{"
         + col_spec
