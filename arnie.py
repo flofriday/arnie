@@ -1058,24 +1058,35 @@ def _linfit(points: list[tuple[float, float]]) -> tuple[float, float] | None:
 def _definitions_vs_time_points(
     data: dict, spec_stats: dict[str, dict[str, int]]
 ) -> dict[str, list[tuple[float, float]]]:
-    """Per configuration (total definitions, mean compile time) points, in configuration order."""
+    """Per configuration (total node size, mean compile time) points, in configuration order."""
     specs = _specs_ordered(spec_stats)
-    defs = {
-        s: spec_stats[s]["Total Definitions"]
+    node_sizes = {
+        s: (
+            spec_stats[s]["Total Definitions"]
+            + spec_stats[s]["Total Statements"]
+            + spec_stats[s]["Total Expressions"]
+        )
         for s in specs
-        if "Total Definitions" in spec_stats[s]
+        if all(
+            k in spec_stats[s]
+            for k in (
+                "Total Definitions",
+                "Total Statements",
+                "Total Expressions",
+            )
+        )
     }
     points: dict[str, list[tuple[float, float]]] = {}
     for build in _builds_ordered(data):
         pts = []
         for spec in specs:
-            if spec not in defs:
+            if spec not in node_sizes:
                 continue
             runs = data[build].get(spec, [])
             if not runs:
                 continue
             mean_time = statistics.mean([_allowed_total(r) for r in runs])
-            pts.append((float(defs[spec]), mean_time))
+            pts.append((float(node_sizes[spec]), mean_time))
         if pts:
             points[build] = pts
     return points
@@ -1123,7 +1134,7 @@ def gen_definitions_vs_time_tex(
         + "\\begin{tikzpicture}\n"
         + "\\begin{axis}[\n"
         + "    width=12cm, height=7cm,\n"
-        + "    xlabel={Total Definitions},\n"
+        + "    xlabel={Total node size},\n"
         + "    ylabel={Total compile time (ms)},\n"
         + "    legend style={at={(1.02,1)},anchor=north west,nodes={anchor=west},font=\\small},\n"
         + _AXIS_BASE
@@ -1133,7 +1144,7 @@ def gen_definitions_vs_time_tex(
         + "\\end{axis}\n"
         + "\\end{tikzpicture}%\n"
         + "}\n"
-        + "\\caption{Compile time as a function of specification size (total definitions).}\n"
+        + "\\caption{Compile time as a function of specification size (total definitions, statements, and expressions).}\n"
         + "\\label{fig:definitions_vs_time}\n"
         + "\\end{figure}\n"
     )
@@ -1153,16 +1164,18 @@ def gen_definitions_vs_time_fit_table_tex(
         if not fit:
             continue
         m, d = fit
+        scaled_m = m * 1000
         sign = "+" if d >= 0 else "-"
-        eq = f"$y = {m:.4f}\\,x {sign} {abs(d):.2f}$"
-        rows.append(f"    {build} & {m:.4f} & {d:.2f} & {eq} \\\\")
+        slope = f"${scaled_m:.2f}\\cdot 10^{{-3}}$"
+        eq = f"$y = {scaled_m:.2f}\\cdot 10^{{-3}}\\,x {sign} {abs(d):.2f}$"
+        rows.append(f"    {build} & {slope} & {d:.2f} & {eq} \\\\")
     if not rows:
         return None
 
     header = " & ".join(
         [
             "\\textbf{Configuration}",
-            "\\textbf{Slope $m$ (ms/def)}",
+            "\\textbf{Slope $m$ (ms/node)}",
             "\\textbf{Intercept $d$ (ms)}",
             "\\textbf{Fit $y = mx + d$}",
         ]
@@ -1178,7 +1191,7 @@ def gen_definitions_vs_time_fit_table_tex(
         "\\hline\n"
         "\\end{tabular}\n"
         "\\caption{Least-squares linear fit of compile time vs.\\ total "
-        "definitions.}\n"
+        "node size.}\n"
         "\\label{tab:definitions_vs_time_fit}\n"
         "\\end{table}\n"
     )
