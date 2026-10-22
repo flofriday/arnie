@@ -34,14 +34,21 @@ IGNORED_PASSES = [
     "hidden",
 ]
 
-_HERE = Path(__file__).resolve().parent.parent
-
 # Per-spec paths, keyed by compiler family. Specs without an entry for a given
 # family are skipped for builds belonging to that family.
+_SECRET_SPECS = Path(__file__).resolve().parent.parent / "secret_specs"
+
 SPECS: dict[str, dict[str, str | Path]] = {
     "rv32i": {
-        "openvadl": "sys/risc-v/rv32i.vadl",
-        "original": "sys/risc-v/newsrc/rv32i.vadl",
+        "openvadl": _SECRET_SPECS / "rv32i.vadl",
+        "original": _SECRET_SPECS / "rv32i-old.vadl",
+    },
+    "rv64im": {
+        "openvadl": "sys/risc-v/rv64im.vadl",
+        "original": "sys/risc-v/newsrc/rv64im.vadl",
+    },
+    "VarRisc": {
+        "openvadl": "sys/v-risc/VarRisc.vadl",
     },
     "ppc64": {
         "openvadl": "sys/ppc64/ppc64.vadl",
@@ -54,21 +61,11 @@ SPECS: dict[str, dict[str, str | Path]] = {
         "original": "sys/aarch64/src/aarch64.vadl",
         "openvadl": "sys/aarch64/aarch64.vadl",
     },
-    "miniARMv7": {
-        "openvadl": _HERE / "secret_specs" / "miniARMv7.vadl",
-        "original": "sys/aarch32/src/miniARMv7.vadl",
-    },
     "aarch32": {
         "openvadl": "sys/aarch32/aarch32.vadl",
     },
-    "aarch32-expanded": {
-        "openvadl": _HERE / "secret_specs" / "aarch32-expanded.vadl",
-    },
     "huge": {
         "openvadl": "sys/huge/huge.vadl",
-    },
-    "huge-expanded": {
-        "openvadl": _HERE / "secret_specs" / "huge-expanded.vadl",
     },
 }
 

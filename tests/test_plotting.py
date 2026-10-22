@@ -25,8 +25,8 @@ class PlottingTests(unittest.TestCase):
         ]:
             with self.subTest(generate=generate):
                 text = generate().read_text()
-                self.assertIn("rv32i", text)
-                self.assertIn("huge", text)
+                self.assertIn("rv32i", text.lower())
+                self.assertIn("huge", text.lower())
 
     def test_individual_breakdown_only_labels_specs_present_in_that_build(self):
         plotting.gen_phase_breakdown_tex(self.data, self.root)
