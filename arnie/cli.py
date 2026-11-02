@@ -4,7 +4,7 @@ import argparse
 import tomllib
 
 from .benchmark import cmd_bench
-from .config import BUILD_CONFIGS, cmd_config
+from .config import BUILD_CONFIGS, cmd_config, openvadl_builds
 from .errors import ArnieError
 from .plotting import cmd_plot
 
@@ -79,6 +79,53 @@ def build_parser() -> argparse.ArgumentParser:
         help="copy original build data from data/latest instead of re-running it",
     )
 
+    compare = subparsers.add_parser(
+        "compare",
+        help="benchmark OpenVADL at multiple git refs and plot the comparison",
+        color=True,
+    )
+    compare.add_argument(
+        "refs",
+        nargs="*",
+        metavar="REF",
+        help="OpenVADL git refs (branches, tags, or commits) to compare",
+    )
+    compare.add_argument(
+        "--build",
+        action="append",
+        choices=openvadl_builds(),
+        metavar="TYPE",
+        help=(
+            "build to include: "
+            + ", ".join(openvadl_builds())
+            + " (repeatable; default: all OpenVADL builds)"
+        ),
+    )
+    compare.add_argument(
+        "--runs",
+        type=_positive_int,
+        default=10,
+        metavar="N",
+        help="number of measured runs per spec (default: 10)",
+    )
+    compare.add_argument(
+        "--warmup",
+        type=_nonnegative_int,
+        default=3,
+        metavar="N",
+        help="number of warmup runs to discard (default: 3)",
+    )
+    compare.add_argument(
+        "--png",
+        action="store_true",
+        help="also rasterize PDF pages to PNG via Ghostscript or Poppler",
+    )
+    compare.add_argument(
+        "--plot-only",
+        action="store_true",
+        help="skip benchmarking and only re-plot data/latest",
+    )
+
     plot = subparsers.add_parser(
         "plot",
         help="plot benchmark results from data/",
@@ -99,6 +146,27 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def cmd_compare(args: argparse.Namespace) -> None:
+    """Benchmark OpenVADL at multiple git refs, then plot the comparison."""
+    if args.plot_only:
+        cmd_plot(argparse.Namespace(data="data/latest", png=args.png))
+        return
+    if len(args.refs) < 2:
+        raise ArnieError("compare requires at least two refs (or use --plot-only).")
+    print(f"Comparing OpenVADL refs: {', '.join(args.refs)}\n")
+    cmd_bench(
+        argparse.Namespace(
+            build=args.build,
+            runs=args.runs,
+            warmup=args.warmup,
+            no_build=False,
+            reuse_original=False,
+            ref=args.refs,
+        )
+    )
+    cmd_plot(argparse.Namespace(data="data/latest", png=args.png))
+
+
 def main(argv: list[str] | None = None) -> None:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -109,6 +177,8 @@ def main(argv: list[str] | None = None) -> None:
                 cmd_config(args)
             case "bench":
                 cmd_bench(args)
+            case "compare":
+                cmd_compare(args)
             case "plot":
                 cmd_plot(args)
     except (ArnieError, OSError, tomllib.TOMLDecodeError) as e:

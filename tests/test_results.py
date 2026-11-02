@@ -9,6 +9,7 @@ from arnie.results import (
     load_all_runs_total,
     load_benchmark,
     load_runs,
+    ordered_builds,
     read_run,
     read_spec_stats,
 )
@@ -110,3 +111,56 @@ class ResultTests(unittest.TestCase):
         self.csv("native/huge/run_1.csv", "pass,duration_ms\nSymbol Resolution,2\n")
         _, data = load_benchmark(self.root)
         self.assertEqual(data, {"native": {"huge": [{"Name Resolution": 2.0}]}})
+
+    def test_ordered_builds_groups_variants_by_base_build(self):
+        available = {
+            "native@main",
+            "graalvm@feature-x",
+            "original",
+            "graalvm@main",
+            "native@feature-x",
+        }
+        self.assertEqual(
+            ordered_builds(available),
+            [
+                "original",
+                "graalvm@feature-x",
+                "graalvm@main",
+                "native@feature-x",
+                "native@main",
+            ],
+        )
+
+    def test_ordered_builds_places_plain_build_before_its_variants(self):
+        self.assertEqual(
+            ordered_builds({"graalvm@main", "graalvm"}),
+            ["graalvm", "graalvm@main"],
+        )
+
+    def test_load_benchmark_reads_variant_directories_with_openvadl_family(self):
+        self.csv("metadata.toml", 'builds = ["graalvm@main", "graalvm@feature"]\n')
+        self.csv(
+            "graalvm@main/rv32i/run_1.csv",
+            "pass,duration_ms\nSymbol Resolution,2\n",
+        )
+        self.csv(
+            "graalvm@feature/rv32i/run_1.csv",
+            "pass,duration_ms\nName Resolution,5\n",
+        )
+        _, data = load_benchmark(self.root)
+        self.assertEqual(
+            data,
+            {
+                "graalvm@main": {"rv32i": [{"Name Resolution": 2.0}]},
+                "graalvm@feature": {"rv32i": [{"Name Resolution": 5.0}]},
+            },
+        )
+
+    def test_load_benchmark_reads_sanitized_variant_with_tilde(self):
+        self.csv("metadata.toml", 'builds = ["native@chore~feature"]\n')
+        self.csv(
+            "native@chore~feature/rv32i/run_1.csv",
+            "pass,duration_ms\nParsing,3\n",
+        )
+        _, data = load_benchmark(self.root)
+        self.assertEqual(data, {"native@chore~feature": {"rv32i": [{"Parsing": 3.0}]}})

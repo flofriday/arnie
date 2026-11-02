@@ -168,6 +168,52 @@ PASS_RENAME: dict[str, dict[str, str]] = {
 }
 
 
+def split_variant(name: str) -> tuple[str, str | None]:
+    """Split a variant name like 'graalvm@main' into ('graalvm', 'main').
+
+    Plain build names return (name, None). Longer build names are matched
+    first so prefixes cannot shadow each other.
+    """
+    for build in sorted(BUILD_CONFIGS, key=len, reverse=True):
+        prefix = f"{build}@"
+        if name.startswith(prefix):
+            return build, name[len(prefix) :]
+    return name, None
+
+
+def variant_name(build: str, ref: str) -> str:
+    """Create a variant directory name from a base build and a git ref.
+
+    '/' in refs is replaced with '~' (which git forbids in ref names, so no
+    collision is possible) to keep the variant a single directory level.
+    """
+    return f"{build}@{ref.replace('/', '~')}"
+
+
+def display_name(name: str) -> str:
+    """Human-readable form of a build or variant name (undoes variant_name)."""
+    base, ref = split_variant(name)
+    if ref is not None:
+        return f"{base}@{ref.replace('~', '/')}"
+    return name
+
+
+def build_config(name: str) -> BuildConfig:
+    """Return the BuildConfig for a build name or variant name."""
+    base, _ = split_variant(name)
+    return BUILD_CONFIGS[base]
+
+
+def build_family(name: str) -> str:
+    """Return the compiler family for a build name or variant name."""
+    return build_config(name)["family"]
+
+
+def openvadl_builds() -> list[str]:
+    """Return all build names whose family is OpenVADL."""
+    return [b for b in BUILD_CONFIGS if BUILD_CONFIGS[b]["family"] == "openvadl"]
+
+
 def load_config() -> dict:
     if not CONFIG_FILE.exists():
         return {}

@@ -81,6 +81,103 @@ class PlottingTests(unittest.TestCase):
         text = plotting.gen_speedup_table_tex(self.data, self.root).read_text()
         self.assertIn(r"5.00$\times$", text)
 
+    def test_speedup_table_compares_variants_of_same_base_build(self):
+        data = {
+            "graalvm@main": {"rv32i": [{"Parsing": 10}]},
+            "graalvm@feature": {"rv32i": [{"Parsing": 5}]},
+        }
+        text = plotting.gen_speedup_table_tex(data, self.root).read_text()
+        self.assertIn("graalvm@feature", text)
+        self.assertIn("graalvm@main", text)
+        # ordered_builds sorts alphabetically: feature < main, so the pair
+        # is (feature, main) and the value is feature/main = 5/10 = 0.50x.
+        self.assertIn(r"0.50$\times$", text)
+
+    def test_speedup_table_ignores_variants_of_different_base_builds(self):
+        data = {
+            "graalvm@main": {"rv32i": [{"Parsing": 10}]},
+            "native@main": {"rv32i": [{"Parsing": 5}]},
+        }
+        self.assertIsNone(plotting.gen_speedup_table_tex(data, self.root))
+
+    def test_relative_comparison_plot_shows_ratios_and_percentages(self):
+        data = {
+            "native@master": {"rv32i": [{"Parsing": 100}], "huge": [{"Parsing": 200}]},
+            "native@chore~feature": {
+                "rv32i": [{"Parsing": 90}],
+                "huge": [{"Parsing": 210}],
+            },
+        }
+        outputs = plotting.gen_relative_comparison_tex(
+            data, self.root, build_order=["native@master", "native@chore~feature"]
+        )
+        self.assertEqual(len(outputs), 1)
+        text = outputs[0].read_text()
+        # master is the baseline; chore~feature is 10% faster on rv32i (0.90)
+        # and 5% slower on huge (1.05).
+        self.assertIn("(rv32i,0.9000) [-10.0", text)
+        self.assertIn("(huge,1.0500) [+5.0", text)
+        # Reference line at y=1 and baseline in caption.
+        self.assertIn("(axis cs:rv32i,1)", text)
+        self.assertIn("native@master", text)
+        # Display name restores the slash for the variant label.
+        self.assertIn("native@chore/feature", text)
+        self.assertIn(r"\label{fig:relative_comparison_native}", text)
+
+    def test_relative_comparison_plot_skips_non_variant_builds(self):
+        data = {
+            "original": {"rv32i": [{"Parsing": 10}]},
+            "graalvm": {"rv32i": [{"Parsing": 5}]},
+        }
+        self.assertEqual(plotting.gen_relative_comparison_tex(data, self.root), [])
+
+    def test_relative_comparison_plot_uses_build_order_for_baseline(self):
+        data = {
+            "native@a": {"rv32i": [{"Parsing": 100}]},
+            "native@b": {"rv32i": [{"Parsing": 50}]},
+        }
+        # Without build_order, ordered_builds sorts alphabetically: a is baseline.
+        outputs = plotting.gen_relative_comparison_tex(data, self.root)
+        text = outputs[0].read_text()
+        self.assertIn("(rv32i,0.5000) [-50.0", text)
+        self.assertIn("native@a", text)
+        # With build_order putting b first, b is the baseline.
+        outputs = plotting.gen_relative_comparison_tex(
+            data, self.root, build_order=["native@b", "native@a"]
+        )
+        text = outputs[0].read_text()
+        self.assertIn("(rv32i,2.0000) [+100.0", text)
+        self.assertIn("native@b", text)
+
+    def test_preamble_includes_variant_refs_and_commits(self):
+        meta = {
+            "builds": ["graalvm@main", "graalvm@feature-x"],
+            "runs": 10,
+            "warmup": 3,
+            "build_details": {
+                "graalvm@main": {
+                    "family": "openvadl",
+                    "commit": "aaa111222333",
+                    "ref": "main",
+                    "runs": 10,
+                    "warmup": 3,
+                },
+                "graalvm@feature-x": {
+                    "family": "openvadl",
+                    "commit": "bbb444555666",
+                    "ref": "feature-x",
+                    "runs": 10,
+                    "warmup": 3,
+                },
+            },
+        }
+        text = plotting.gen_preamble_tex(meta, self.root).read_text()
+        self.assertIn("graalvm@main", text)
+        self.assertIn("graalvm@feature-x", text)
+        self.assertIn("aaa111", text)
+        self.assertIn("bbb444", text)
+        self.assertIn("used 10~timed runs after 3~warmup runs", text)
+
     def test_stats_table_contains_metrics_from_later_specs(self):
         out = plotting.gen_spec_stats_table_tex(
             {"rv32i": {"Files": 1}, "huge": {"Files": 2, "Total Definitions": 99}},

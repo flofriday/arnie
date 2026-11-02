@@ -9,7 +9,7 @@ import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
 
-from .config import BUILD_CONFIGS, PASS_RENAME
+from .config import BUILD_CONFIGS, PASS_RENAME, display_name, split_variant
 from .errors import ArnieError
 from .results import (
     BenchmarkData,
@@ -45,6 +45,11 @@ def _tex_escape(value: object) -> str:
         "^": r"\textasciicircum{}",
     }
     return "".join(replacements.get(c, c) for c in str(value))
+
+
+def _label(build: str) -> str:
+    """Escaped, human-readable display name for a build or variant."""
+    return _tex_escape(display_name(build))
 
 
 # pgfplots fill colour + hatch pattern per bar series index
@@ -118,7 +123,7 @@ def gen_preamble_tex(meta: dict, plots_dir: Path) -> Path:
     )
     tex = _arnie_header() + f"Benchmarks were recorded on {_tex_escape(machine)}.\n"
     for build in meta.get("builds", meta.get("configurations", [])):
-        cfg = BUILD_CONFIGS.get(build, {})
+        cfg = BUILD_CONFIGS.get(split_variant(build)[0], {})
         details = meta.get("build_details", {}).get(build, {})
         commit = details.get(
             "commit", meta.get("commits", {}).get(cfg.get("repo_key"), "unknown")
@@ -126,7 +131,7 @@ def gen_preamble_tex(meta: dict, plots_dir: Path) -> Path:
         runs = details.get("runs", meta.get("runs", "?"))
         warmup = details.get("warmup", meta.get("warmup", "?"))
         tex += (
-            f"Configuration \\texttt{{{_tex_escape(build)}}} at commit "
+            f"Configuration \\texttt{{{_label(build)}}} at commit "
             f"\\texttt{{{_tex_escape(commit[:12])}}} used {_tex_escape(runs)}~timed runs "
             f"after {_tex_escape(warmup)}~warmup runs per specification.\n"
         )
@@ -219,7 +224,7 @@ def gen_total_time_tex(data: BenchmarkData, plots_dir: Path) -> Path:
             f"\\addplot[{_pgf_style(i)}]\n"
             f"    plot[error bars/.cd, y dir=both, y explicit]\n"
             f"    coordinates {{{' '.join(coords)}}};\n"
-            f"\\addlegendentry{{{_tex_escape(build)}}}"
+            f"\\addlegendentry{{{_label(build)}}}"
         )
 
     xtick = ",".join(f"{t:.3f}" for t in tick_pos)
@@ -271,8 +276,7 @@ def gen_total_time_table_tex(data: BenchmarkData, plots_dir: Path) -> Path:
 
     col_spec = "|l|" + "r|" * len(builds)
     header = " & ".join(
-        ["\\textbf{Specification}"]
-        + [f"\\textbf{{{_tex_escape(b)}}} (ms)" for b in builds]
+        ["\\textbf{Specification}"] + [f"\\textbf{{{_label(b)}}} (ms)" for b in builds]
     )
 
     rows = []
@@ -307,6 +311,145 @@ def gen_total_time_table_tex(data: BenchmarkData, plots_dir: Path) -> Path:
     out = plots_dir / "total_time_table.tex"
     out.write_text(tex)
     return out
+
+
+def gen_relative_comparison_tex(
+    data: BenchmarkData,
+    plots_dir: Path,
+    build_order: list[str] | None = None,
+) -> list[Path]:
+    """Bar charts of variant compile time relative to a baseline, per base build.
+
+    For each base build with two or more variants, one figure shows
+    mean(variant) / mean(baseline) per specification. A dashed line at 1.0
+    marks the baseline; bars below 1 mean the variant is faster. Each bar
+    carries a percentage-change label. The baseline is the first variant in
+    build_order (command-line order) when given, else ordered_builds order.
+    """
+    builds = ordered_builds(data)
+    if build_order:
+
+        def order_key(b: str) -> tuple[int, str]:
+            try:
+                return (build_order.index(b), b)
+            except ValueError:
+                return (len(build_order), b)
+
+        builds = sorted(builds, key=order_key)
+
+    by_base: dict[str, list[str]] = {}
+    for build in builds:
+        base, ref = split_variant(build)
+        if ref:
+            by_base.setdefault(base, []).append(build)
+
+    outputs: list[Path] = []
+    for base, variants in by_base.items():
+        if len(variants) < 2:
+            continue
+        baseline = variants[0]
+        others = variants[1:]
+        specs = [
+            s for s in benchmark_specs(data) if any(data[v].get(s) for v in variants)
+        ]
+        if not specs:
+            continue
+
+        means: dict[str, dict[str, float]] = {}
+        for build in variants:
+            means[build] = {
+                spec: (
+                    statistics.mean(
+                        [allowed_total(r) for r in data[build].get(spec, [])]
+                    )
+                    if data[build].get(spec)
+                    else 0.0
+                )
+                for spec in specs
+            }
+
+        all_ratios: list[float] = []
+        for variant in others:
+            for spec in specs:
+                b = means[baseline][spec]
+                v = means[variant][spec]
+                if b > 0 and v > 0:
+                    all_ratios.append(v / b)
+        if all_ratios:
+            lo = min(min(all_ratios), 1.0)
+            hi = max(max(all_ratios), 1.0)
+            span = max(hi - lo, 0.02)
+            ymin = lo - span * 0.3
+            ymax = hi + span * 0.3
+        else:
+            ymin, ymax = 0.9, 1.1
+
+        sym = ",".join(specs)
+        labels = ",".join(f"{{{_tex_escape(s)}}}" for s in specs)
+
+        addplots = []
+        for i, variant in enumerate(others):
+            coords = []
+            for spec in specs:
+                b = means[baseline][spec]
+                v = means[variant][spec]
+                if b > 0 and v > 0:
+                    ratio = v / b
+                    pct = (ratio - 1) * 100
+                    label = f"{pct:+.1f}\\%"
+                    coords.append(f"({spec},{ratio:.4f}) [{label}]")
+            if not coords:
+                continue
+            addplots.append(
+                f"\\addplot[{_pgf_style(i)}]\n"
+                f"    plot[nodes near coords, point meta=explicit symbolic]\n"
+                f"    coordinates {{ {' '.join(coords)} }};\n"
+                f"\\addlegendentry{{{_label(variant)}}}"
+            )
+        if not addplots:
+            continue
+
+        reference = (
+            f"\\draw[dashed, gray!70!black, thick] "
+            f"(axis cs:{specs[0]},1) -- (axis cs:{specs[-1]},1);"
+        )
+        body = "\n".join(addplots) + "\n" + reference
+        tex = (
+            _arnie_header()
+            + "\\begin{figure}[H]\n"
+            + "\\centering\n"
+            + "\\resizebox{\\linewidth}{!}{%\n"
+            + "\\begin{tikzpicture}\n"
+            + "\\begin{axis}[\n"
+            + "    ybar,\n"
+            + "    bar width=10pt,\n"
+            + "    width=14cm, height=8cm,\n"
+            + f"    symbolic x coords={{{sym}}},\n"
+            + "    xtick=data,\n"
+            + f"    xticklabels={{{labels}}},\n"
+            + "    xticklabel style={rotate=30, anchor=north east, font=\\small},\n"
+            + "    enlarge x limits=0.08,\n"
+            + "    xlabel={Specification},\n"
+            + "    ylabel={Relative compile time (baseline = 1)},\n"
+            + "    legend style={at={(1.02,1)},anchor=north west,nodes={anchor=west},font=\\small},\n"
+            + "    nodes near coords style={font=\\tiny},\n"
+            + _AXIS_BASE
+            + f"    ymin={ymin:.4f}, ymax={ymax:.4f},\n"
+            + "]\n"
+            + body
+            + "\n"
+            + "\\end{axis}\n"
+            + "\\end{tikzpicture}%\n"
+            + "}\n"
+            + f"\\caption{{Compile time of each variant relative to \\texttt{{{_label(baseline)}}} per specification (1.0 = no change, below 1 = faster). Percentage labels show the change.}}\n"
+            + f"\\label{{fig:relative_comparison_{base}}}\n"
+            + "\\end{figure}\n"
+        )
+        out = plots_dir / f"relative_comparison_{base}.tex"
+        out.write_text(tex)
+        outputs.append(out)
+
+    return outputs
 
 
 def _phase_means(
@@ -379,7 +522,7 @@ def gen_phase_breakdown_tex(data: BenchmarkData, plots_dir: Path) -> list[Path]:
             + "\\end{axis}\n"
             + "\\end{tikzpicture}%\n"
             + "}\n"
-            + f"\\caption{{Pass breakdown for the \\texttt{{{_tex_escape(build)}}} configuration.}}\n"
+            + f"\\caption{{Pass breakdown for the \\texttt{{{_label(build)}}} configuration.}}\n"
             + f"\\label{{fig:phase_breakdown_{build}}}\n"
             + "\\end{figure}\n"
         )
@@ -440,7 +583,7 @@ def gen_phase_breakdown_combined_tex(data: BenchmarkData, plots_dir: Path) -> Pa
     # at y=1); spec names are the bottom x-axis labels.
     build_labels = "\n".join(
         f"\\node[font=\\tiny,rotate=30,anchor=south west,inner sep=2pt] "
-        f"at (axis cs:{bar_x[(spec, build)]:.2f},1) {{{_tex_escape(build)}}};"
+        f"at (axis cs:{bar_x[(spec, build)]:.2f},1) {{{_label(build)}}};"
         for spec, build in pairs
     )
 
@@ -491,7 +634,9 @@ def gen_warmup_plot_tex(data_dir: Path, meta: dict, plots_dir: Path) -> Path | N
         build_dir = data_dir / build / spec
         if not build_dir.exists():
             continue
-        family = BUILD_CONFIGS.get(build, {}).get("family", "openvadl")
+        family = BUILD_CONFIGS.get(split_variant(build)[0], {}).get(
+            "family", "openvadl"
+        )
         totals = load_all_runs_total(build_dir, family)
         if totals:
             series[build] = totals
@@ -507,7 +652,7 @@ def gen_warmup_plot_tex(data_dir: Path, meta: dict, plots_dir: Path) -> Path | N
         addplots.append(
             f"\\addplot[color={color}, mark={mark}, line width=1pt] "
             f"coordinates {{{coords}}};\n"
-            f"\\addlegendentry{{{_tex_escape(build)}}}"
+            f"\\addlegendentry{{{_label(build)}}}"
         )
 
     separators = []
@@ -624,7 +769,7 @@ def gen_definitions_vs_time_tex(
         marker_plots.append(
             f"\\addplot[only marks, color={color}, mark={mark}, mark size=3pt] "
             f"coordinates {{{coords}}};\n"
-            f"\\addlegendentry{{{_tex_escape(build)}}}"
+            f"\\addlegendentry{{{_label(build)}}}"
         )
         fit = _linfit(pts)
         if fit:
@@ -680,7 +825,7 @@ def gen_definitions_vs_time_fit_table_tex(
         sign = "+" if d >= 0 else "-"
         slope = f"${scaled_m:.2f}\\cdot 10^{{-3}}$"
         eq = f"$y = {scaled_m:.2f}\\cdot 10^{{-3}}\\,x {sign} {abs(d):.2f}$"
-        rows.append(f"    {_tex_escape(build)} & {slope} & {d:.2f} & {eq} \\\\")
+        rows.append(f"    {_label(build)} & {slope} & {d:.2f} & {eq} \\\\")
     if not rows:
         return None
 
@@ -758,21 +903,44 @@ def gen_spec_stats_table_tex(spec_stats: SpecStats, plots_dir: Path) -> Path:
     return out
 
 
+def _speedup_pairs(data: BenchmarkData) -> list[tuple[str, str]]:
+    """Return (baseline, compared) pairs for the speedup table.
+
+    Fixed pairs cover known build combinations. Variant pairs compare
+    consecutive refs of the same base build (e.g. graalvm@main vs
+    graalvm@feature).
+    """
+    builds = ordered_builds(data)
+    pairs = [
+        (a, b)
+        for a, b in [
+            ("original", "graalvm"),
+            ("original", "native"),
+            ("graalvm", "native"),
+        ]
+        if a in data and b in data
+    ]
+    by_base: dict[str, list[str]] = {}
+    for build in builds:
+        base, ref = split_variant(build)
+        if ref:
+            by_base.setdefault(base, []).append(build)
+    for variants in by_base.values():
+        for i in range(len(variants) - 1):
+            pairs.append((variants[i], variants[i + 1]))
+    return pairs
+
+
 def gen_speedup_table_tex(data: BenchmarkData, plots_dir: Path) -> Path | None:
     specs = benchmark_specs(data)
-    candidate_pairs = [
-        ("original", "graalvm"),
-        ("original", "native"),
-        ("graalvm", "native"),
-    ]
-    pairs = [(a, b) for a, b in candidate_pairs if a in data and b in data]
+    pairs = _speedup_pairs(data)
     if not pairs:
         return None
 
     col_spec = "|l" + "|r" * len(pairs) + "|"
     header = " & ".join(
         ["\\textbf{Specification}"]
-        + [f"\\textbf{{{_tex_escape(b)} vs {_tex_escape(a)}}}" for a, b in pairs]
+        + [f"\\textbf{{{_label(b)} vs {_label(a)}}}" for a, b in pairs]
     )
 
     rows = []
@@ -941,6 +1109,7 @@ def cmd_plot(args: argparse.Namespace) -> None:
 
     snippets = (
         [gen_total_time_tex(data, plots_dir)]
+        + gen_relative_comparison_tex(data, plots_dir, meta.get("builds"))
         + gen_phase_breakdown_tex(data, plots_dir)
         + [gen_phase_breakdown_combined_tex(data, plots_dir)]
     )
@@ -968,7 +1137,9 @@ def cmd_plot(args: argparse.Namespace) -> None:
             print(f"  Generated: {fit_table.name}")
             appendix_tables.append(fit_table)
     original_family_builds = [
-        b for b in data if BUILD_CONFIGS.get(b, {}).get("family") == "original"
+        b
+        for b in data
+        if BUILD_CONFIGS.get(split_variant(b)[0], {}).get("family") == "original"
     ]
     if original_family_builds:
         pass_rename_table = gen_pass_rename_table_tex(plots_dir)

@@ -5,11 +5,11 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import tomli_w
 
-from arnie import benchmark
+from arnie import benchmark, config
 from arnie.errors import ArnieError
 from arnie.results import load_metadata, load_runs
 
@@ -47,6 +47,8 @@ class BenchmarkTests(unittest.TestCase):
             ("SPECS", {"rv32i": {"openvadl": "input.vadl"}}),
         ]:
             self.enterContext(patch.object(benchmark, target, value))
+        # build_config/split_variant read BUILD_CONFIGS from config's namespace.
+        self.enterContext(patch.object(config, "BUILD_CONFIGS", self.config))
         self.enterContext(
             patch.object(
                 benchmark, "require_repos", return_value={"open_vadl_path": self.repo}
@@ -57,7 +59,12 @@ class BenchmarkTests(unittest.TestCase):
         )
         self.enterContext(contextlib.redirect_stdout(io.StringIO()))
         self.args = argparse.Namespace(
-            build=["native"], runs=2, warmup=1, no_build=True, reuse_original=False
+            build=["native"],
+            runs=2,
+            warmup=1,
+            no_build=True,
+            reuse_original=False,
+            ref=None,
         )
 
     def test_success_preserves_history_and_records_distinct_warmups(self):
@@ -188,4 +195,173 @@ class BenchmarkTests(unittest.TestCase):
                     benchmark.cmd_bench(self.args)
         self.assertEqual(
             list(self.data_dir.iterdir()), [self.old, self.data_dir / "latest"]
+        )
+
+    def _enable_refs(self, refs, *, checkout_side_effect=None):
+        """Configure args for a ref benchmark and mock git operations."""
+        self.args.ref = refs
+        self.args.no_build = False
+        self.checkout_mock = Mock()
+        if checkout_side_effect is not None:
+            self.checkout_mock.side_effect = checkout_side_effect
+        else:
+            self.checkout_mock.side_effect = lambda repo, ref: f"commit-{ref}"
+        self.enterContext(patch.object(benchmark, "git_checkout", self.checkout_mock))
+        self.enterContext(
+            patch.object(benchmark, "git_current_ref", return_value="main")
+        )
+        self.enterContext(
+            patch.object(benchmark, "git_has_tracked_changes", return_value=False)
+        )
+
+    def test_bench_works_without_ref_attribute(self):
+        """The bench CLI does not set args.ref; cmd_bench must tolerate that."""
+        del self.args.ref
+        benchmark.cmd_bench(self.args)
+        current = (self.data_dir / "latest").resolve()
+        self.assertNotEqual(current, self.old)
+        self.assertEqual(len(load_runs(current / "native" / "rv32i")), 2)
+
+    def test_ref_benchmarks_create_variants_and_restore_git_state(self):
+        self._enable_refs(["main", "feature-x"])
+        benchmark.cmd_bench(self.args)
+        current = (self.data_dir / "latest").resolve()
+        self.assertNotEqual(current, self.old)
+        meta = load_metadata(current)
+        self.assertEqual(meta["builds"], ["native@main", "native@feature-x"])
+        for variant, ref in [
+            ("native@main", "main"),
+            ("native@feature-x", "feature-x"),
+        ]:
+            detail = meta["build_details"][variant]
+            self.assertEqual(detail["ref"], ref)
+            self.assertEqual(detail["commit"], f"commit-{ref}")
+            self.assertEqual(detail["family"], "openvadl")
+            self.assertEqual(detail["runs"], 2)
+            self.assertEqual(detail["warmup"], 1)
+            spec_dir = current / variant / "rv32i"
+            self.assertEqual(len(load_runs(spec_dir)), 2)
+            self.assertTrue((spec_dir / "warmup_1.csv").exists())
+        # Checkouts: each ref, then restore to the saved branch.
+        self.assertEqual(
+            [c.args[1] for c in self.checkout_mock.call_args_list],
+            ["main", "feature-x", "main"],
+        )
+        self.assertEqual(meta["commits"]["open_vadl_path"], "new-commit")
+
+    def test_ref_rejects_original_build(self):
+        self.config["original"] = {
+            **self.config["native"],
+            "family": "original",
+            "repo_key": "original_vadl_path",
+        }
+        self._enable_refs(["main"])
+        self.args.build = ["original"]
+        with self.assertRaisesRegex(ArnieError, "only applies to OpenVADL"):
+            benchmark.cmd_bench(self.args)
+
+    def test_ref_rejects_reuse_original(self):
+        self._enable_refs(["main"])
+        self.args.reuse_original = True
+        with self.assertRaisesRegex(ArnieError, "cannot be combined"):
+            benchmark.cmd_bench(self.args)
+
+    def test_ref_rejects_no_build(self):
+        self._enable_refs(["main"])
+        self.args.no_build = True
+        with self.assertRaisesRegex(ArnieError, "requires building"):
+            benchmark.cmd_bench(self.args)
+
+    def test_ref_rejects_dirty_repo(self):
+        self._enable_refs(["main"])
+        self.enterContext(
+            patch.object(benchmark, "git_has_tracked_changes", return_value=True)
+        )
+        with self.assertRaisesRegex(ArnieError, "uncommitted changes"):
+            benchmark.cmd_bench(self.args)
+
+    def test_ref_checkout_failure_restores_git_state(self):
+        def fail_on_bad_ref(repo, ref):
+            if ref == "bad-ref":
+                raise ArnieError(f"pathspec '{ref}' did not match")
+            return f"commit-{ref}"
+
+        self._enable_refs(["main", "bad-ref"], checkout_side_effect=fail_on_bad_ref)
+        with self.assertRaisesRegex(ArnieError, "bad-ref"):
+            benchmark.cmd_bench(self.args)
+        # The saved branch was restored even though the run failed.
+        self.assertEqual(
+            [c.args[1] for c in self.checkout_mock.call_args_list],
+            ["main", "bad-ref", "main"],
+        )
+        self.assertEqual((self.data_dir / "latest").resolve(), self.old)
+
+    def test_ref_duplicate_refs_are_deduplicated(self):
+        self._enable_refs(["main", "main"])
+        benchmark.cmd_bench(self.args)
+        meta = load_metadata((self.data_dir / "latest").resolve())
+        self.assertEqual(meta["builds"], ["native@main"])
+
+    def test_ref_with_slash_creates_flat_variant_directory(self):
+        self._enable_refs(["master", "chore/frontend-polish"])
+        benchmark.cmd_bench(self.args)
+        current = (self.data_dir / "latest").resolve()
+        meta = load_metadata(current)
+        self.assertEqual(
+            meta["builds"], ["native@master", "native@chore~frontend-polish"]
+        )
+        # The variant is a single directory, not a nested path.
+        variant_dir = current / "native@chore~frontend-polish"
+        self.assertTrue(variant_dir.is_dir())
+        self.assertFalse((current / "native@chore").exists())
+        self.assertEqual(len(load_runs(variant_dir / "rv32i")), 2)
+        # Metadata keeps the original ref for display.
+        self.assertEqual(
+            meta["build_details"]["native@chore~frontend-polish"]["ref"],
+            "chore/frontend-polish",
+        )
+        # git checkout receives the original (unsanitized) ref.
+        checked_out = [c.args[1] for c in self.checkout_mock.call_args_list]
+        self.assertIn("chore/frontend-polish", checked_out)
+
+    def test_ref_defaults_to_all_openvadl_builds(self):
+        self.config["graalvm"] = {
+            **self.config["native"],
+            "family": "openvadl",
+            "repo_key": "open_vadl_path",
+        }
+        self._enable_refs(["main"])
+        self.args.build = None
+        benchmark.cmd_bench(self.args)
+        meta = load_metadata((self.data_dir / "latest").resolve())
+        self.assertEqual(sorted(meta["builds"]), ["graalvm@main", "native@main"])
+
+    def test_ref_gradle_build_prepends_clean(self):
+        self._enable_refs(["main"])
+        gradlew = self.repo / "gradlew"
+        gradlew.write_text(f"#!{sys.executable}\n")
+        gradlew.chmod(0o755)
+        self.config["native"]["build_cmd"] = [str(gradlew), "installDist"]
+        commands = []
+        original_run = benchmark.subprocess.run
+
+        def capture(cmd, **kwargs):
+            if cmd and str(cmd[0]).endswith("gradlew"):
+                commands.append(list(cmd))
+            return original_run(cmd, **kwargs)
+
+        self.enterContext(patch.object(benchmark.subprocess, "run", capture))
+        benchmark.cmd_bench(self.args)
+        self.assertEqual(commands, [[str(gradlew), "clean", "installDist"]])
+
+    def test_ref_failure_does_not_publish_latest(self):
+        self._enable_refs(["main"])
+        self.compiler.write_text("pass\n")  # compiler produces no timings.csv
+        with self.assertRaisesRegex(ArnieError, "did not produce"):
+            benchmark.cmd_bench(self.args)
+        self.assertEqual((self.data_dir / "latest").resolve(), self.old)
+        # Git state was still restored.
+        self.assertEqual(
+            [c.args[1] for c in self.checkout_mock.call_args_list],
+            ["main", "main"],
         )

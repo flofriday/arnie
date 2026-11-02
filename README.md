@@ -15,6 +15,7 @@ uv run arnie bench                      # Build and benchmark all configurations
 uv run arnie bench --build native --runs 10 --warmup 3
 uv run arnie bench --build graalvm --build native --no-build
 uv run arnie bench --reuse-original      # Reuse original results from data/latest
+uv run arnie compare main feature-x     # Benchmark + plot two OpenVADL refs
 uv run arnie plot                       # Generate plots/plots.pdf and TeX snippets
 uv run arnie plot --data data/<run> --png
 ```
@@ -23,6 +24,39 @@ The existing `uv run arnie.py ...` entry point and `uv run python -m arnie ...`
 also work. `--runs` must be positive; `--warmup` may be zero. Repeating `--build`
 selects multiple configurations. `--reuse-original` requires `original` to be
 selected (all configurations are selected by default).
+
+### Comparing OpenVADL refs
+
+`arnie compare` benchmarks OpenVADL at two or more git refs — branches, tags,
+or commit hashes — and plots the comparison in one step:
+
+```bash
+uv run arnie compare main my-feature
+uv run arnie compare v0.1.0 v0.2.0
+uv run arnie compare --build graalvm main my-feature
+uv run arnie compare --runs 20 --warmup 5 main my-feature other-branch
+uv run arnie compare --png main my-feature
+uv run arnie compare --plot-only        # Re-plot data/latest without re-benchmarking
+```
+
+Each ref creates a variant named `<build>@<ref>` (e.g. `graalvm@main`,
+`graalvm@my-feature`; `/` in ref names is escaped as `~` in directory names
+but shown normally in plots). The command checks out each ref in the OpenVADL
+repository, runs a clean build, benchmarks all specifications, restores the
+original branch or commit, and then generates the report in `plots/` — no
+separate `plot` call needed. When no `--build` is given, all OpenVADL builds
+(`graalvm` and `native`) are benchmarked at each ref.
+
+`compare` requires a clean working tree (commit or stash changes first). The
+original compiler build is not involved; results are stored under `data/` like
+any other run and `data/latest` points to the comparison.
+
+When the report contains variants of the same build, a **relative comparison
+figure** is included: a bar chart of `mean(variant) / mean(baseline)` per
+specification with a dashed line at 1.0 and percentage labels on each bar, so
+small differences between refs are immediately visible (below 1 = faster). The
+first ref given on the command line is the baseline. Use `--plot-only` to
+iterate on the rendering without re-running the benchmarks.
 
 Compiler builds need the tools required by their respective repositories. The
 original compiler's Java 17 environment currently uses macOS's
@@ -55,11 +89,13 @@ counts for reused results.
 
 ## Development
 
-- `arnie/config.py`: compiler commands, specification paths, pass mappings, and
-  local configuration. Add builds and specs here; specs absent for a compiler
+- `arnie/config.py`: compiler commands, specification paths, pass mappings,
+  variant helpers (`split_variant`, `variant_name`, `build_config`), and local
+  configuration. Add builds and specs here; specs absent for a compiler
   family are skipped. Private specs are resolved under this checkout's
   `secret_specs/` directory.
-- `arnie/benchmark.py`: build execution, measurement capture, and result metadata.
+- `arnie/benchmark.py`: build execution, git ref checkout/restore, measurement
+  capture, and result metadata.
 - `arnie/results.py`: CSV validation, name normalization, ordering, and totals.
 - `arnie/plotting.py`: LaTeX figures, tables, compilation, and PNG export.
 - `arnie/cli.py`: command-line arguments and user-facing errors.

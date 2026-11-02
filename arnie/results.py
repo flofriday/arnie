@@ -7,7 +7,7 @@ import tomllib
 from collections.abc import Mapping
 from pathlib import Path
 
-from .config import BUILD_CONFIGS, IGNORED_PASSES, PASS_RENAME, SPECS
+from .config import BUILD_CONFIGS, IGNORED_PASSES, PASS_RENAME, SPECS, split_variant
 from .errors import ArnieError
 
 type TimingRun = dict[str, float]
@@ -77,7 +77,8 @@ def load_benchmark(data_dir: Path) -> tuple[dict, BenchmarkData]:
         if not build_dir.is_dir() or build_dir.name == "latest":
             continue
         build = build_dir.name
-        family = BUILD_CONFIGS.get(build, {}).get("family", "openvadl")
+        base, _ = split_variant(build)
+        family = BUILD_CONFIGS.get(base, {}).get("family", "openvadl")
         specs = {
             spec_dir.name: runs
             for spec_dir in sorted(build_dir.iterdir())
@@ -136,7 +137,21 @@ def ordered_specs(available: Mapping) -> list[str]:
 
 
 def ordered_builds(available: Mapping) -> list[str]:
-    return _ordered(available, BUILD_CONFIGS)
+    """Order builds by BUILD_CONFIGS position, then by variant ref.
+
+    Variant names (e.g. 'graalvm@main') sort after their base build and are
+    grouped by ref within the same base build.
+    """
+
+    def sort_key(name: str) -> tuple[int, str]:
+        base, ref = split_variant(name)
+        try:
+            base_order = list(BUILD_CONFIGS).index(base)
+        except ValueError:
+            base_order = len(BUILD_CONFIGS)
+        return (base_order, ref or "")
+
+    return sorted(available, key=sort_key)
 
 
 def benchmark_specs(data: BenchmarkData) -> list[str]:
